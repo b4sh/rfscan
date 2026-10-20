@@ -14,6 +14,8 @@ It works with any receiver supported by [SoapySDR](https://github.com/pothosware
 - **Knowledge of your band.** A channel file gives names and modes to frequencies, an exclusion list skips interference and unwanted channels (one key in the TUI), and an activity log counts how long each frequency was active.
 - **Three ways to use it.** A text interface (TUI), a plain console mode for logs and scripts (`--headless`), and a web GUI for a phone or a browser (`--web-gui`).
 
+![rfscan scanning the 2 m band in the TUI](docs/screenshot-tui.png)
+
 ## Tested receivers
 
 | Receiver | Settings that worked | Speed |
