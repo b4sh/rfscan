@@ -1,0 +1,7 @@
+/target
+/dist
+# Private files of the author, not published
+/SPEC.md
+/CLAUDE.md
+/NOTATKI.md
+/.private.git

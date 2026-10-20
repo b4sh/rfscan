@@ -1,0 +1,339 @@
+//! Excluded channel list: file loading, `--exclude`, channel mask.
+//!
+//! File: one entry per line, `#` starts a comment, empty lines are ignored, frequencies in MHz.
+//! An entry is a single channel frequency (`433.920`); ranges are not supported. A missing file
+//! is an empty list. A line that cannot be parsed (including a range) produces a warning with
+//! the line number, and the rest of the file is loaded.
+//!
+//! Changes from the TUI: adding an entry appends a line and flushes it at once, so a
+//! crash loses nothing; removing an entry rewrites the file atomically (temporary file + rename),
+//! keeping comments and lines the program does not understand.
+
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+use crate::plan::ScanPlan;
+
+/// Exclusion file name in the user's configuration directory.
+const FILE_NAME: &str = "rfscan-exclude.txt";
+
+/// File entries with their notes, shared between the scanner and the TUI.
+pub type SharedList = std::sync::Arc<std::sync::Mutex<Vec<(u64, Option<String>)>>>;
+
+#[derive(Debug, Default)]
+pub struct Exclusions {
+    /// Excluded frequencies from the file (Hz), in file order.
+    pub entries: Vec<u64>,
+    /// Notes (the comment on the entry's line), parallel to `entries`.
+    pub notes: Vec<Option<String>>,
+    /// Temporary exclusions from `--exclude` (Hz), never saved.
+    pub temp: Vec<u64>,
+}
+
+/// Default exclusion file path (user's configuration directory).
+pub fn default_path() -> Option<PathBuf> {
+    crate::paths::config_dir().map(|d| d.join(FILE_NAME))
+}
+
+/// Parses one entry (without a comment): channel frequency in MHz, e.g. `433.920`.
+pub fn parse_entry(s: &str) -> Result<u64, String> {
+    let s = s.trim();
+    if s.contains('-') {
+        return Err(format!(
+            "'{s}': ranges are not supported, give single channels (e.g. 433.920)"
+        ));
+    }
+    let v: f64 = s
+        .parse()
+        .map_err(|_| format!("'{s}': expected a channel frequency in MHz (e.g. 433.920)"))?;
+    let hz = (v * 1e6).round();
+    if !v.is_finite() || hz <= 0.0 {
+        return Err(format!("'{s}': frequency must be positive"));
+    }
+    // An airband channel number (three decimal places) is converted to the actual frequency.
+    crate::airband::from_text(s, hz as u64).map(|(f, _)| f)
+}
+
+/// Parses the file content. Returns the entries and warnings for lines that cannot be parsed.
+#[cfg(test)]
+fn parse_file(text: &str) -> (Vec<u64>, Vec<String>) {
+    let (items, warnings) = parse_items(text);
+    (items.into_iter().map(|(f, _)| f).collect(), warnings)
+}
+
+/// Parses the file content into entries with their notes (the comment on the entry's line).
+fn parse_items(text: &str) -> (Vec<(u64, Option<String>)>, Vec<String>) {
+    let mut items = Vec::new();
+    let mut warnings = Vec::new();
+    // A BOM from Windows editors is not an error.
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    for (n, line) in text.lines().enumerate() {
+        let (content, comment) = match line.split_once('#') {
+            Some((c, note)) => (c.trim(), Some(note.trim())),
+            None => (line.trim(), None),
+        };
+        if content.is_empty() {
+            continue;
+        }
+        match parse_entry(content) {
+            Ok(e) => items.push((e, comment.filter(|c| !c.is_empty()).map(str::to_string))),
+            Err(e) => warnings.push(format!("line {}: {e}", n + 1)),
+        }
+    }
+    (items, warnings)
+}
+
+impl Exclusions {
+    /// Loads the file. A missing file is an empty list (no warnings).
+    pub fn load(path: &Path) -> Result<(Self, Vec<String>), String> {
+        match std::fs::read_to_string(path) {
+            Ok(text) => {
+                let (items, warnings) = parse_items(&text);
+                let (entries, notes) = items.into_iter().unzip();
+                Ok((
+                    Exclusions {
+                        entries,
+                        notes,
+                        temp: Vec::new(),
+                    },
+                    warnings,
+                ))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Ok((Exclusions::default(), Vec::new()))
+            }
+            Err(e) => Err(format!(
+                "cannot read exclusion file {}: {e}",
+                path.display()
+            )),
+        }
+    }
+
+    /// Adds temporary exclusions from `--exclude F,...` (MHz).
+    pub fn add_cli(&mut self, list: &str) -> Result<(), String> {
+        for item in list.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            self.temp
+                .push(parse_entry(item).map_err(|e| format!("--exclude {e}"))?);
+        }
+        Ok(())
+    }
+
+    /// Plan channel mask (channel index -> excluded). An entry covers channels whose center lies
+    /// within half the channel spacing (range step or bw of a listed channel). Built once, at
+    /// startup.
+    pub fn mask(&self, plan: &ScanPlan) -> Vec<bool> {
+        plan.channels
+            .iter()
+            .map(|c| {
+                self.entries
+                    .iter()
+                    .chain(&self.temp)
+                    .any(|&f| (c.freq as f64 - f as f64).abs() <= c.spacing / 2.0)
+            })
+            .collect()
+    }
+
+    /// Adds `freqs` to the file (appended and flushed at once) and to the list, with an optional
+    /// note (written as the line's comment).
+    /// Airband frequencies are written as channel numbers (`raster25`: the 25 kHz raster ones).
+    pub fn add(
+        &mut self,
+        path: &Path,
+        freqs: &[u64],
+        note: Option<&str>,
+        raster25: &[u64],
+    ) -> Result<(), String> {
+        append(path, freqs, note, raster25)?;
+        self.entries.extend_from_slice(freqs);
+        self.notes
+            .extend(freqs.iter().map(|_| note.map(str::to_string)));
+        Ok(())
+    }
+
+    /// Removes `freqs` from the file (atomic rewrite) and from the list.
+    pub fn remove(&mut self, path: &Path, freqs: &[u64]) -> Result<(), String> {
+        remove_lines(path, freqs)?;
+        let mut notes = std::mem::take(&mut self.notes).into_iter();
+        let (entries, notes): (Vec<u64>, Vec<Option<String>>) = self
+            .entries
+            .iter()
+            .map(|&f| (f, notes.next().flatten()))
+            .filter(|(f, _)| !freqs.contains(f))
+            .unzip();
+        self.entries = entries;
+        self.notes = notes;
+        Ok(())
+    }
+
+    /// File entries with their notes, in file order.
+    pub fn with_notes(&self) -> Vec<(u64, Option<String>)> {
+        self.entries
+            .iter()
+            .copied()
+            .zip(self.notes.iter().cloned().chain(std::iter::repeat(None)))
+            .collect()
+    }
+}
+
+/// Appends entries to the file, each with the note as its comment. A file that does not end with
+/// a newline gets one first, so the new entry does not merge with the last line.
+fn append(path: &Path, freqs: &[u64], note: Option<&str>, raster25: &[u64]) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| format!("cannot create directory {}: {e}", dir.display()))?;
+    }
+    let needs_newline = std::fs::read(path)
+        .map(|b| b.last().is_some_and(|&c| c != b'\n'))
+        .unwrap_or(false);
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| format!("cannot open exclusion file {}: {e}", path.display()))?;
+    let mut text = String::new();
+    if needs_newline {
+        text.push('\n');
+    }
+    for &hz in freqs {
+        let mhz = crate::airband::file_text(hz, raster25.contains(&hz));
+        match note {
+            Some(n) => text.push_str(&format!("{mhz:<22} # {n}\n")),
+            None => text.push_str(&format!("{mhz}\n")),
+        }
+    }
+    f.write_all(text.as_bytes())
+        .and_then(|_| f.sync_data())
+        .map_err(|e| format!("writing {}: {e}", path.display()))
+}
+
+/// Rewrites the file without the lines whose entry is in `freqs`. Comments, empty lines and
+/// lines that cannot be parsed stay.
+fn remove_lines(path: &Path, freqs: &[u64]) -> Result<(), String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("cannot read exclusion file {}: {e}", path.display()))?;
+    let mut out = String::with_capacity(text.len());
+    for line in text.split_inclusive('\n') {
+        let content = line
+            .trim_start_matches('\u{feff}')
+            .split('#')
+            .next()
+            .unwrap_or("")
+            .trim();
+        let drop = !content.is_empty() && parse_entry(content).is_ok_and(|f| freqs.contains(&f));
+        if !drop {
+            out.push_str(line);
+        }
+    }
+    let tmp = path.with_extension("txt.tmp");
+    std::fs::write(&tmp, out).map_err(|e| format!("writing {}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, path).map_err(|e| format!("writing {}: {e}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plan::{Modulation, RangeSpec, Step, ranges_plan};
+
+    #[test]
+    fn parse_file_with_comments_and_bad_lines() {
+        let text = "\u{feff}# rfscan: exclusions\n433.920                # added with the x key\n\n433.920-434.100 # range\n433.00625\nabc\n";
+        let (e, w) = parse_file(text);
+        assert_eq!(e, vec![433_920_000, 433_006_250]);
+        assert_eq!(w.len(), 2);
+        assert!(w[0].starts_with("line 4:") && w[0].contains("ranges are not supported"));
+        assert!(w[1].starts_with("line 6:"));
+    }
+
+    #[test]
+    fn mask_single_channels() {
+        let r = RangeSpec {
+            start: 144_000_000,
+            stop: 146_000_000,
+            step: Step::from_hz(12_500),
+            bw: 12_500.0,
+            bw_explicit: false,
+            mode: Modulation::Nfm,
+        };
+        let p = ranges_plan(&[r], 4_800_000, 1).unwrap();
+        let mut ex = Exclusions::default();
+        // 3 kHz from channel 145.000 covers only that channel.
+        ex.add_cli("145.003, 145.1").unwrap();
+        let m = ex.mask(&p);
+        let idx = |f: u64| ((f - 144_000_000) / 12_500) as usize;
+        assert!(m[idx(145_000_000)] && m[idx(145_100_000)]);
+        assert!(!m[idx(144_987_500)] && !m[idx(145_012_500)]);
+        assert_eq!(m.iter().filter(|&&x| x).count(), 2);
+        assert!(ex.add_cli("145.0-145.1").is_err());
+        assert!(ex.add_cli("xyz").is_err());
+    }
+
+    /// Adding appends (also after a last line without a newline), removing keeps comments and
+    /// lines the program does not understand.
+    #[test]
+    fn add_and_remove_keep_the_rest_of_the_file() {
+        let dir = std::env::temp_dir().join(format!("rfscan-excl-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(FILE_NAME);
+        std::fs::write(&path, "# my list\n144.000 # carrier\nbad line\n438.000").unwrap();
+        let (mut ex, _) = Exclusions::load(&path).unwrap();
+        ex.add(
+            &path,
+            &[145_500_000, 145_512_500],
+            Some("interference"),
+            &[],
+        )
+        .unwrap();
+        ex.add(&path, &[146_000_000], None, &[]).unwrap();
+        let (again, w) = Exclusions::load(&path).unwrap();
+        assert_eq!(
+            again.entries,
+            vec![
+                144_000_000,
+                438_000_000,
+                145_500_000,
+                145_512_500,
+                146_000_000
+            ]
+        );
+        // Notes are the comments on the entry lines.
+        assert_eq!(
+            again.notes,
+            vec![
+                Some("carrier".to_string()),
+                None,
+                Some("interference".to_string()),
+                Some("interference".to_string()),
+                None
+            ]
+        );
+        assert_eq!(ex.notes, again.notes);
+        assert_eq!(w.len(), 1);
+        ex.remove(&path, &[438_000_000, 145_500_000]).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.starts_with("# my list\n144.000 # carrier\nbad line\n"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("438.000") && !text.contains("145.500 "),
+            "{text}"
+        );
+        assert!(text.contains("145.5125"), "{text}");
+        assert_eq!(ex.entries, vec![144_000_000, 145_512_500, 146_000_000]);
+        assert_eq!(
+            ex.notes,
+            vec![
+                Some("carrier".to_string()),
+                Some("interference".to_string()),
+                None
+            ]
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn missing_file_is_empty() {
+        let (ex, w) = Exclusions::load(Path::new("does/not/exist/rfscan-exclude.txt")).unwrap();
+        assert!(ex.entries.is_empty() && w.is_empty());
+    }
+}

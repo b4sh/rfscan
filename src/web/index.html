@@ -1,0 +1,791 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>rfscan</title>
+<!-- A shortcut on the home screen opens the page as an app, without the address bar. -->
+<link rel="manifest" href="{MANIFEST}">
+<link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<meta name="theme-color" content="#1a1a1a">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="rfscan">
+<style>
+/* palette: #1a1a1a, #1f5230, #55a845, #d8eaa8 */
+/* dark theme (default) */
+:root {
+  --bg: #1a1a1a;
+  --card: #222622;
+  --card2: #1f5230;
+  --line: #2e3a2f;
+  --text: #eef3e2;
+  --dim: #a3b293;
+  --faint: #66705e;
+  --accent: #55a845;
+  --on-accent: #1a1a1a;
+  --name: #d8eaa8;
+  --scan: #d8eaa8;
+  --lock: #55a845;
+  --hang: #e5bf4c;
+  --pause: #b3a6e8;
+  --danger: #e5584f;
+  --del-bg: #8a2f2a;
+  --digi: #e17bd2;
+  --radius: 8px;
+  color-scheme: dark;
+}
+/* light theme, chosen with the theme button */
+:root[data-theme="light"] {
+  --bg: #f1f5e4;
+  --card: #ffffff;
+  --card2: #d8eaa8;
+  --line: #c8d5ae;
+  --text: #1a1a1a;
+  --dim: #4b5843;
+  --faint: #98a38a;
+  --accent: #1f5230;
+  --on-accent: #eef5d6;
+  --name: #1f5230;
+  --scan: #1f5230;
+  --lock: #3b8a2d;
+  --hang: #946a00;
+  --pause: #65549f;
+  --danger: #b8322a;
+  --del-bg: #b8443c;
+  --digi: #a3338f;
+  color-scheme: light;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.35 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-tap-highlight-color: transparent;
+  font-variant-numeric: tabular-nums;
+}
+button { font: inherit; color: inherit; }
+
+/* header */
+header {
+  position: sticky; top: 0; z-index: 5;
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 16px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+}
+.brand { font-weight: 700; letter-spacing: .4px; }
+.device { color: var(--dim); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.grow { flex: 1; }
+.pill { padding: 2px 8px; border-radius: 5px; font-weight: 700; font-size: 12px; letter-spacing: .6px; border: 1.5px solid currentColor; white-space: nowrap; }
+.conn { width: 9px; height: 9px; border-radius: 50%; background: var(--lock); flex: none; }
+.theme { border: 1px solid var(--line); background: var(--card); border-radius: 6px; width: 32px; height: 28px; cursor: pointer; font-size: 14px; }
+
+/* layout */
+.layout { padding: 10px 16px 84px; max-width: 1400px; margin: 0 auto; }
+section.card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; margin-bottom: 10px; }
+body[data-tab="main"] #lists { display: none; }
+body:not([data-tab="main"]) #main { display: none; }
+
+/* main display */
+/* main display: fixed rows like the display of a device; unused fields are dimmed, never removed */
+.display { text-align: center; }
+.display .row { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.off { opacity: .3; }
+.bigrow { height: clamp(46px, 14vw, 78px); display: flex; align-items: center; justify-content: center; }
+.big { font-size: clamp(42px, 13vw, 72px); font-weight: 800; letter-spacing: -.5px; line-height: 1; }
+.big.word { font-size: clamp(30px, 9vw, 52px); letter-spacing: 2px; color: var(--scan); }
+.big.word.paused { color: var(--pause); }
+.unit { color: var(--dim); font-size: 15px; height: 20px; line-height: 20px; }
+.name { font-size: clamp(17px, 5vw, 22px); font-weight: 700; color: var(--name); height: 30px; line-height: 30px; margin-top: 2px; }
+.meta { color: var(--dim); font-size: 14px; height: 20px; line-height: 20px; }
+.meta b { color: var(--text); font-weight: 600; }
+.info { font-size: 13px; color: var(--dim); height: 20px; line-height: 20px; }
+.info.digi { color: var(--digi); font-weight: 600; }
+.state { font-size: 15px; font-weight: 700; height: 22px; line-height: 22px; color: var(--dim); }
+.state.hang { color: var(--hang); }
+.state.paused { color: var(--pause); }
+.hang .big, .hang .name { color: var(--faint); }
+
+.range { margin-top: 6px; text-align: left; }
+/* One slot for two layers: the measurements on a lock, the window spectrum while scanning. Both
+   are always laid out, only one is visible, so the slot keeps the height of the taller one. */
+.panel { display: grid; grid-template-columns: minmax(0, 1fr); margin-top: 8px; text-align: left; }
+.panel > div { grid-area: 1 / 1; min-width: 0; }
+/* pass, window, cycle in fixed thirds, so a changing number does not move the others */
+.passline { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); font-size: 13px; color: var(--dim); height: 18px; line-height: 18px; text-align: center; white-space: nowrap; }
+.passline b { color: var(--text); }
+.panel > .hidden { visibility: hidden; }
+.measure { text-align: left; }
+.snrrow { display: flex; align-items: baseline; justify-content: space-between; height: 30px; }
+.snrval { font-size: 24px; font-weight: 800; }
+.snrval small { font-size: 14px; color: var(--dim); font-weight: 600; }
+.bar { position: relative; height: 14px; border-radius: 4px; background: var(--card2); margin: 6px 0 3px; overflow: hidden; }
+.bar .fill { position: absolute; inset: 0 auto 0 0; background: var(--lock); border-radius: 4px; transition: width .15s; }
+.hang .bar .fill { background: var(--faint); }
+.bar .mark { position: absolute; top: 0; bottom: 0; width: 3px; background: var(--text); }
+.bar .mark.exit { background: var(--hang); }
+.barlegend { display: flex; justify-content: space-between; font-size: 11px; color: var(--dim); }
+.kv { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; margin-top: 8px; font-size: 14px; }
+.kv > div { white-space: nowrap; overflow: hidden; }
+.kv span { color: var(--dim); }
+
+.rangehead { font-size: 13px; color: var(--dim); text-align: center; height: 18px; line-height: 18px; white-space: nowrap; overflow: hidden; }
+.rangehead b { color: var(--text); }
+.posbar { position: relative; height: 8px; background: var(--card2); border-radius: 3px; margin: 5px 0; overflow: hidden; }
+.posbar .seg { position: absolute; top: 0; bottom: 0; background: var(--scan); border-radius: 3px; transition: left .2s; }
+.spectrum { position: relative; display: flex; align-items: flex-end; gap: 1px; height: 64px; margin-top: 4px; border-bottom: 1px solid var(--line); }
+.spectrum i { flex: 1; background: var(--scan); opacity: .75; border-radius: 1px 1px 0 0; min-height: 2px; }
+.spectrum i.x { background: var(--danger); opacity: .6; }
+.spectrum i.unused { display: none; }
+.spectrum .thr { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--hang); }
+.specinfo { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2.4fr) minmax(0, 1fr); gap: 6px; font-size: 12px; color: var(--dim); margin-top: 4px; height: 16px; white-space: nowrap; }
+.specinfo span { overflow: hidden; text-overflow: ellipsis; text-align: center; }
+.specinfo span:first-child { text-align: left; }
+.specinfo span:last-child { text-align: right; }
+
+/* controls */
+.controls { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.btn {
+  min-height: 46px; border-radius: 6px; border: 1px solid var(--line); background: var(--card2);
+  font-size: 15px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 6px;
+  cursor: pointer; user-select: none;
+}
+.btn:active { transform: scale(.97); }
+.btn:disabled { opacity: .35; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.btn.warn { color: var(--danger); border-color: var(--danger); background: transparent; }
+.btn.on { background: var(--lock); border-color: var(--lock); color: var(--on-accent); }
+.btn.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+.squelch { grid-column: 1 / -1; display: grid; grid-template-columns: 56px 1fr 56px; align-items: center; gap: 8px; }
+.squelch .val { text-align: center; }
+.squelch .val b { font-size: 21px; }
+.squelch .val div, .nrval div { font-size: 11px; color: var(--dim); font-weight: 400; }
+.nrval { flex-direction: column; gap: 0; min-width: 0; }
+.nrval div { max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nrval b { font-size: 18px; }
+.nrval.off b { color: var(--faint); }
+.stats { font-size: 12px; color: var(--dim); display: flex; flex-wrap: wrap; gap: 3px 12px; }
+.stats b { color: var(--text); font-weight: 600; }
+
+/* lists: phone = two compact lines per row, large screen = columns; everything left-aligned */
+.listtabs { display: none; gap: 6px; margin-bottom: 10px; }
+.listtabs button { flex: 1; min-height: 38px; border-radius: 6px; border: 1px solid var(--line); background: var(--card2); font-weight: 700; cursor: pointer; }
+.listtabs button.active { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.listpane { display: none; }
+body[data-list="history"] #pane-history,
+body[data-list="activity"] #pane-activity,
+body[data-list="excl"] #pane-excl { display: block; }
+.listhead { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+.listhead h2 { margin: 0; font-size: 17px; }
+.listhead .stats { flex: 1; }
+.lrow { display: flex; flex-wrap: wrap; align-items: baseline; gap: 1px 8px; padding: 6px 2px; border-bottom: 1px solid var(--line); font-size: 13px; cursor: pointer; }
+.lrow:last-child { border-bottom: 0; }
+.lrow.head { display: none; }
+.lrow .f { font-size: 15px; font-weight: 700; }
+.lrow .n { color: var(--name); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
+.lrow .c { color: var(--dim); }
+.lrow .c[data-l]::before { content: attr(data-l) " "; color: var(--faint); }
+.lrow .note { color: var(--hang); }
+.lrow .br { flex-basis: 100%; height: 0; }
+.mode { display: inline-block; width: 38px; text-align: center; font-size: 10px; font-weight: 800; padding: 1px 0; border-radius: 3px; background: var(--card2); color: var(--dim); }
+.mode.digi { color: var(--digi); }
+.smallbtn { min-height: 32px; padding: 0 10px; border-radius: 5px; border: 1px solid var(--line); background: var(--card2); font-weight: 700; font-size: 13px; cursor: pointer; }
+.smallbtn.del { min-height: 26px; padding: 0 8px; font-size: 12px; background: var(--del-bg); border-color: var(--del-bg); color: #fbeceb; }
+
+/* bottom tab bar (phone) */
+nav.tabs {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 5;
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  background: var(--card); border-top: 1px solid var(--line);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+nav.tabs button { min-height: 54px; border: 0; background: none; color: var(--dim); font-size: 12px; font-weight: 700; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; }
+nav.tabs button .ico { font-size: 18px; }
+nav.tabs button.active { color: var(--accent); }
+
+/* sheets and dialogs */
+.backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 20; display: none; align-items: flex-end; justify-content: center; }
+.backdrop.open { display: flex; }
+.sheet { width: 100%; max-width: 520px; background: var(--card); border: 1px solid var(--line); border-radius: 10px 10px 0 0; padding: 14px 16px calc(14px + env(safe-area-inset-bottom)); }
+.sheet h3 { margin: 0 0 2px; font-size: 18px; }
+.sheet .sub { color: var(--dim); margin-bottom: 12px; font-size: 14px; }
+.sheet input[type=text] { width: 100%; min-height: 44px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font-size: 16px; padding: 0 12px; margin-bottom: 10px; }
+.sheet .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+.switch { display: flex; align-items: center; justify-content: space-between; min-height: 44px; padding: 0 2px; font-weight: 600; }
+.switch input { width: 22px; height: 22px; accent-color: var(--digi); }
+
+
+/* large landscape screen */
+@media (min-width: 960px) and (orientation: landscape) {
+  .layout { display: grid; grid-template-columns: minmax(400px, 520px) 1fr; gap: 14px; padding-bottom: 14px; align-items: start; }
+  body #main, body #lists { display: block !important; }
+  #lists { position: sticky; top: 56px; max-height: calc(100vh - 70px); overflow: auto; }
+  nav.tabs { display: none; }
+  .listtabs { display: flex; }
+  .lrow { display: grid; gap: 10px; padding: 5px 2px; align-items: center; }
+  .lrow .br { display: none; }
+  .lrow .c[data-l]::before { content: none; }
+  .lrow .n { flex: none; }
+  .lrow .mode { justify-self: start; }
+  .lrow.head { display: grid; font-size: 11px; font-weight: 700; color: var(--faint); text-transform: uppercase; letter-spacing: .5px; cursor: default; }
+  #pane-history .lrow  { grid-template-columns: 96px 44px minmax(120px, 1fr) 70px 50px 64px 84px; }
+  #pane-activity .lrow { grid-template-columns: 96px 44px minmax(120px, 1fr) 56px 60px 40px 50px; }
+  #pane-excl .lrow     { grid-template-columns: 96px minmax(120px, 1fr) minmax(160px, 2fr) 60px; }
+}
+.conn.off { background: var(--danger); }
+.toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 70px; z-index: 40; max-width: 90%; background: var(--danger); color: #fff; padding: 8px 14px; border-radius: 6px; font-weight: 600; display: none; }
+.toast.show { display: block; }
+.empty { color: var(--faint); padding: 10px 2px; font-size: 13px; }
+.about a { color: var(--dim); }
+body.nolocal #bMute { display: none; }
+body.nolocal #bAudio { grid-column: 1 / -1; }
+@media (min-width: 960px) and (orientation: landscape) { .toast { bottom: 20px; } }
+</style>
+</head>
+<body data-tab="main" data-list="history">
+
+<header>
+  <span class="conn off" id="conn" title="connection to rfscan"></span>
+  <span class="brand">rfscan</span>
+  <span class="device" id="device"></span>
+  <span class="grow"></span>
+  <span class="pill" id="statePill">OFFLINE</span>
+  <button class="theme" id="bTheme" title="light / dark">◐</button>
+</header>
+
+<div class="layout">
+  <div id="main">
+    <section class="card" id="displayCard">
+      <div class="display">
+        <div class="bigrow"><span class="big" id="dBig"></span></div>
+        <div class="unit row" id="dUnit">MHz</div>
+        <div class="name row" id="dName"></div>
+        <div class="meta row" id="dMeta"></div>
+        <div class="info row" id="dInfo"></div>
+        <div class="state row" id="dState"></div>
+        <div class="range">
+          <div class="rangehead" id="dRangeLine"></div>
+          <div class="posbar"><div class="seg" id="dSeg"></div></div>
+        </div>
+        <div class="panel">
+        <div class="measure" id="dMeasure">
+          <div class="snrrow"><div class="snrval"><span id="dSnr">-</span> <small>dB SNR</small></div><div class="meta">max <span id="dPeakSnr">-</span> dB</div></div>
+          <div class="bar"><div class="fill" id="dFill"></div><div class="mark exit" id="dExit"></div><div class="mark" id="dEntry"></div></div>
+          <div class="barlegend"><span>0</span><span id="dLegend"></span><span>50 dB</span></div>
+          <div class="kv">
+            <div><span>RSSI</span> <b id="dRssi">-</b></div>
+            <div><span>noise</span> <b id="dNoise">-</b></div>
+            <div><span>max RSSI</span> <b id="dPeakRssi">-</b></div>
+            <div><span>AGC</span> <b id="dAgc">-</b></div>
+          </div>
+        </div>
+        <div class="scan" id="dScan">
+          <div class="passline"><span>pass <b id="dPass">-</b></span><span>window <b id="dWin">-</b></span><span>cycle <b id="dCycle">-</b></span></div>
+          <div class="spectrum" id="dSpectrum"><div class="thr" id="dThr"></div></div>
+          <div class="specinfo"><span id="dFirst"></span><span id="dStrongest"></span><span id="dLast"></span></div>
+        </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="controls">
+        <button class="btn" id="bPause">❚❚ Pause</button>
+        <button class="btn" id="bSkip">⏭ Skip</button>
+        <button class="btn warn" id="bExclude">✕ Exclude</button>
+        <button class="btn" id="bUndo">↶ Undo</button>
+        <div class="squelch">
+          <button class="btn" id="bSqDown">−</button>
+          <div class="val"><b id="sqVal">-</b><div>squelch (SNR)</div><div>exit: <span id="sqExit">-</span> dB</div></div>
+          <button class="btn" id="bSqUp">+</button>
+        </div>
+        <div class="squelch">
+          <button class="btn" id="bNrDown">−</button>
+          <button class="btn nrval" id="bNr"><b id="nrVal">NR</b><div id="nrHint">noise reduction</div></button>
+          <button class="btn" id="bNrUp">+</button>
+        </div>
+        <button class="btn primary" id="bAudio">▶ Audio</button>
+        <button class="btn" id="bMute">🔈 Mute PC</button>
+      </div>
+    </section>
+
+    <section class="card stats" id="stats"></section>
+    <div class="stats about" id="about"></div>
+  </div>
+
+  <div id="lists">
+    <section class="card">
+      <div class="listtabs">
+        <button data-l="history">History</button>
+        <button data-l="activity">Activity</button>
+        <button data-l="excl">Exclusions</button>
+      </div>
+
+      <div class="listpane" id="pane-history">
+        <div class="listhead"><h2>History</h2><span class="stats">last 200</span></div>
+        <div id="historyList"></div>
+      </div>
+
+      <div class="listpane" id="pane-activity">
+        <div class="listhead"><h2>Activity</h2><span class="stats">sorted by total time</span><button class="smallbtn" id="bClear">Clear all</button></div>
+        <div id="activityList"></div>
+      </div>
+
+      <div class="listpane" id="pane-excl">
+        <div class="listhead"><h2>Exclusions</h2><span class="stats" id="exclCount"></span></div>
+        <div id="exclList"></div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<nav class="tabs">
+  <button data-t="main" class="active"><span class="ico">◉</span>Scanner</button>
+  <button data-t="history"><span class="ico">☰</span>History</button>
+  <button data-t="activity"><span class="ico">▤</span>Activity</button>
+  <button data-t="excl"><span class="ico">⊘</span>Exclusions</button>
+</nav>
+
+<!-- exclude sheet -->
+<div class="backdrop" id="exSheet">
+  <div class="sheet">
+    <h3>Exclude <span id="exFreq"></span></h3>
+    <div class="sub" id="exName"></div>
+    <input type="text" id="exNote" maxlength="40" placeholder="Note (optional), e.g. interference">
+    <button class="btn danger" style="width:100%" id="exOne">✕ Exclude</button>
+    <div class="row">
+      <button class="btn warn" id="exWide">Exclude ±2 channels</button>
+      <button class="btn" data-close>Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- activity item sheet -->
+<div class="backdrop" id="itemSheet">
+  <div class="sheet">
+    <h3 id="itFreq"></h3>
+    <div class="sub" id="itInfo"></div>
+    <input type="text" id="itName" maxlength="40" placeholder="Channel name">
+    <label class="switch">Digital (DSD-FME) <input type="checkbox" id="itDigi"></label>
+    <button class="btn primary" style="width:100%" id="itSave">Save label</button>
+    <div class="row">
+      <button class="btn warn" id="itExclude">✕ Exclude</button>
+      <button class="btn" data-close>Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- confirm dialog -->
+<div class="backdrop" id="confirm">
+  <div class="sheet">
+    <h3 id="cfTitle"></h3>
+    <div class="sub" id="cfText"></div>
+    <div class="row">
+      <button class="btn danger" id="cfYes">Yes</button>
+      <button class="btn" data-close>No</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const fmtT = s => Math.floor(s / 60) + ":" + String(Math.floor(s % 60)).padStart(2, "0");
+const modeTag = m => m ? `<span class="mode ${m === "DIGI" ? "digi" : ""}">${esc(m)}</span>` : `<span></span>`;
+const fix1 = x => (x == null ? "-" : Number(x).toFixed(1));
+
+// State from rfscan: the last message of each kind.
+const S = { hello: null, status: null, lock: null, spectrum: null, history: [], activity: [], excl: [] };
+let ws = null;
+
+function send(o) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(o));
+}
+
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg; t.classList.add("show");
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => t.classList.remove("show"), 4000);
+}
+
+/* ---- connection ---- */
+function connect() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${proto}://${location.host}/ws${location.search}`);
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () => {
+    $("conn").classList.remove("off");
+    if (Audio_.ctx) send({ c: "audio", on: true });
+  };
+  ws.onclose = () => {
+    $("conn").classList.add("off");
+    S.status = null;
+    render();
+    setTimeout(connect, 2000);
+  };
+  ws.onmessage = e => {
+    if (typeof e.data !== "string") { Audio_.frame(e.data); return; }
+    let m;
+    try { m = JSON.parse(e.data); } catch { return; }
+    switch (m.t) {
+      case "hello": S.hello = m; renderHello(); break;
+      case "status": S.status = m; render(); break;
+      case "spectrum": S.spectrum = m; if (!S.lock) renderDisplay(); break;
+      case "lock": S.lock = m; render(); break;
+      case "unlock": S.lock = null; render(); break;
+      case "history": S.history = m.items; renderHistory(); break;
+      case "history_add": S.history.unshift(m.item); S.history.length = Math.min(S.history.length, 200); renderHistory(); break;
+      case "activity": S.activity = m.items; renderActivity(); break;
+      case "exclusions": S.excl = m.items; renderExcl(); break;
+      case "error": toast(m.msg); break;
+    }
+  };
+}
+
+/* ---- audio: 8 kHz μ-law into a ring buffer, played as one continuous stream (works over plain
+   HTTP, unlike AudioWorklet). The context runs at 8 kHz when the browser allows it, so the
+   browser does the resampling to the sound card; otherwise linear interpolation here. ---- */
+const ULAW = new Float32Array(256);
+for (let i = 0; i < 256; i++) {
+  const u = ~i & 0xff, e = (u >> 4) & 7, m = u & 15;
+  const mag = (((m << 3) + 0x84) << e) - 0x84;
+  ULAW[i] = (u & 0x80 ? -mag : mag) / 32768;
+}
+const Audio_ = {
+  RATE: 8000,
+  TARGET: 1200,  // samples queued before playing starts, and after an underrun (0.15 s)
+  MAX: 4000,     // above this the oldest samples are dropped down to TARGET (0.5 s, clock drift)
+  ctx: null, node: null,
+  ring: new Float32Array(8192), w: 0, r: 0, count: 0, frac: 0, step: 1, primed: false,
+  start() {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    let ctx;
+    try { ctx = new AC({ sampleRate: this.RATE }); } catch (e) { ctx = new AC(); }
+    this.ctx = ctx;
+    this.step = this.RATE / ctx.sampleRate;
+    this.w = this.r = this.count = 0; this.frac = 0; this.primed = false;
+    // About 64 ms per callback at 8 kHz (43 ms at 48 kHz).
+    this.node = ctx.createScriptProcessor(ctx.sampleRate <= 16000 ? 512 : 2048, 0, 1);
+    this.node.onaudioprocess = e => this.pull(e.outputBuffer.getChannelData(0));
+    this.node.connect(ctx.destination);
+    ctx.resume();
+    send({ c: "audio", on: true });
+  },
+  stop() {
+    send({ c: "audio", on: false });
+    if (this.node) this.node.disconnect();
+    if (this.ctx) this.ctx.close();
+    this.node = null; this.ctx = null;
+  },
+  frame(buf) {
+    if (!this.ctx) return;
+    const u = new Uint8Array(buf), N = this.ring.length;
+    if (this.count + u.length > this.MAX) {
+      const drop = this.count + u.length - this.TARGET;
+      this.r = (this.r + drop) % N; this.count -= drop;
+    }
+    for (let i = 0; i < u.length; i++) { this.ring[this.w] = ULAW[u[i]]; this.w = (this.w + 1) % N; }
+    this.count += u.length;
+    if (!this.primed && this.count >= this.TARGET) this.primed = true;
+  },
+  pull(out) {
+    const N = this.ring.length;
+    for (let j = 0; j < out.length; j++) {
+      if (!this.primed || this.count < 2) { this.primed = false; out[j] = 0; continue; }
+      const a = this.ring[this.r], b = this.ring[(this.r + 1) % N];
+      out[j] = a + (b - a) * this.frac;
+      this.frac += this.step;
+      while (this.frac >= 1) { this.frac -= 1; this.r = (this.r + 1) % N; this.count--; }
+    }
+  },
+};
+
+/* ---- rendering ---- */
+function renderHello() {
+  const h = S.hello;
+  $("device").textContent = `${h.device} · ${h.rate}`;
+  document.body.classList.toggle("nolocal", !h.local_audio);
+  $("exWide").textContent = `Exclude ±${h.exclude_wide} channels`;
+  $("about").innerHTML = `rfscan ${esc(h.version)} · AGPL-3.0` +
+    (h.source ? ` · <a href="${esc(h.source)}" target="_blank" rel="noopener">source code</a>` : "");
+}
+
+function render() { renderHeader(); renderDisplay(); renderControls(); renderStats(); }
+
+function renderHeader() {
+  const st = S.status, p = $("statePill");
+  const map = { scanning: ["SCANNING", "--scan"], locked: ["LOCKED", "--lock"], hang: ["HANG", "--hang"], paused: ["PAUSED", "--pause"] };
+  const [txt, col] = st ? map[st.state] : ["OFFLINE", "--danger"];
+  p.textContent = txt; p.style.color = `var(${col})`;
+}
+
+// The display has a fixed set of fields (like the display of a device): every update only changes
+// texts, sizes and the `off` class, so nothing moves when the state changes.
+const BINS = 96;
+const dBars = [];
+for (let i = 0; i < BINS; i++) {
+  const b = document.createElement("i");
+  $("dSpectrum").insertBefore(b, $("dThr"));
+  dBars.push(b);
+}
+function setText(id, text) { const e = $(id); if (e.textContent !== text) e.textContent = text; }
+
+function renderDisplay() {
+  const st = S.status, L = S.lock, sp = S.spectrum;
+  const paused = !!(st && st.state === "paused");
+  const hang = !!(L && L.hang_left != null);
+  $("displayCard").classList.toggle("hang", hang);
+
+  // Headline: the frequency on a lock, otherwise a word in the same row.
+  const big = $("dBig");
+  if (L) {
+    setText("dBig", L.label);
+    big.className = "big";
+  } else {
+    // The dots appear one after another; the hidden ones keep the word in place.
+    const n = 1 + Math.floor(Date.now() / 400) % 3;
+    const html = !st ? "OFFLINE" : paused ? "PAUSED"
+      : `SCANNING${".".repeat(n)}<span style="visibility:hidden">${".".repeat(3 - n)}</span>`;
+    if (big.innerHTML !== html) big.innerHTML = html;
+    big.className = "big word" + (paused ? " paused" : "") + (!st ? " off" : "");
+  }
+  $("dUnit").classList.toggle("off", !L);
+  setText("dName", L && L.name ? L.name : " ");
+  $("dMeta").innerHTML = L
+    ? `<b>${esc(L.mode)}</b> · ${esc(L.bw)} · ${fmtT(L.elapsed)}`
+    : `<b>mode</b> · bandwidth · 0:00`;
+  $("dMeta").classList.toggle("off", !L);
+  // Info: the actual airband frequency or the DSD-FME state.
+  const info = L ? (L.digi || L.actual || "") : "";
+  setText("dInfo", info || " ");
+  $("dInfo").className = "info row" + (L && L.digi ? " digi" : "");
+  // State: the pause countdown, the paused scanner, the window being scanned.
+  let state = " ", cls = "";
+  if (!st) state = "waiting for rfscan…";
+  else if (hang) { state = `signal gone · resume in ${L.hang_left.toFixed(1)} s`; cls = " hang"; }
+  else if (paused) { state = "paused · tap Resume to continue"; cls = " paused"; }
+  else if (L) state = "receiving";
+  else if (sp) state = `window LO ${sp.lo} MHz`;
+  setText("dState", state);
+  $("dState").className = "state row" + cls;
+
+  // The range and the position bar are always shown: on a lock the bar marks the window where
+  // the scanner stopped.
+  $("dRangeLine").innerHTML = st
+    ? `range <b>${st.range}/${S.hello ? S.hello.ranges : "-"}</b> · <b>${esc(st.span)}</b>`
+    : "range <b>-</b>";
+  $("dSeg").style.left = (st ? st.pos[0] * 100 : 0) + "%";
+  $("dSeg").style.width = (st ? st.pos[1] * 100 : 0) + "%";
+
+  // The panel: the measurements on a lock, the window spectrum otherwise.
+  const pct = v => Math.max(0, Math.min(100, v / 50 * 100));
+  $("dMeasure").classList.toggle("hidden", !L);
+  $("dScan").classList.toggle("hidden", !!L);
+  $("dScan").classList.toggle("off", !st || paused);
+  setText("dSnr", L ? fix1(L.snr) : "-");
+  setText("dPeakSnr", L ? fix1(L.peak_snr) : "-");
+  $("dFill").style.width = (L ? pct(L.snr) : 0) + "%";
+  $("dEntry").style.left = (st ? pct(st.squelch) : 0) + "%";
+  $("dExit").style.left = (st ? pct(st.squelch - st.hyst) : 0) + "%";
+  setText("dLegend", st ? `squelch ${st.squelch} · exit ${fix1(st.squelch - st.hyst)} (amber)` : "");
+  setText("dRssi", L ? fix1(L.rssi) + " dBFS" : "-");
+  setText("dNoise", L ? fix1(L.noise) + " dBFS" : "-");
+  setText("dPeakRssi", L ? fix1(L.peak_rssi) + " dBFS" : "-");
+  setText("dAgc", L && L.agc != null ? (L.agc >= 0 ? "+" : "") + fix1(L.agc) + " dB" : "-");
+
+  setText("dPass", st ? st.pass : "-");
+  setText("dWin", st ? st.window : "-");
+  setText("dCycle", st ? String(st.cycles) : "-");
+  const max = Math.max(30, st ? st.squelch * 1.5 : 30);
+  for (let i = 0; i < BINS; i++) {
+    const v = sp && i < sp.snr.length ? sp.snr[i] : null;
+    dBars[i].className = !sp || i >= sp.snr.length ? "unused" : sp.ex[i] ? "x" : "";
+    dBars[i].style.height = Math.max(0, Math.min(100, (v ?? 0) / max * 100)) + "%";
+  }
+  $("dThr").style.bottom = (st ? Math.min(100, st.squelch / max * 100) : 0) + "%";
+  setText("dFirst", sp ? sp.first : " ");
+  setText("dLast", sp ? sp.last : "");
+  setText("dStrongest", sp && sp.strongest ? `strongest ${sp.strongest.label} · ${fix1(sp.strongest.snr)} dB` : "");
+}
+
+function renderControls() {
+  const st = S.status, L = S.lock, on = !!st;
+  $("bPause").innerHTML = st && st.state === "paused" ? "▶ Resume" : "❚❚ Pause";
+  $("bPause").classList.toggle("on", !!(st && st.state === "paused"));
+  for (const id of ["bPause", "bUndo", "bSqDown", "bSqUp", "bNr"]) $(id).disabled = !on;
+  $("bSkip").disabled = !(on && L);
+  $("bExclude").disabled = !(on && L);
+  $("sqVal").textContent = st ? st.squelch + " dB" : "-";
+  $("sqExit").textContent = st ? fix1(st.squelch - st.hyst) : "-";
+  const nrOn = !!(st && st.nr);
+  $("nrVal").textContent = st ? (nrOn ? `NR ${st.nr_strength}%` : "NR off") : "NR";
+  $("nrHint").textContent = L && L.mode === "DIGI" ? "not on digi" : "tap to turn " + (nrOn ? "off" : "on");
+  $("bNr").classList.toggle("off", !nrOn);
+  $("bNrDown").disabled = $("bNrUp").disabled = !nrOn;
+  const audio = !!Audio_.ctx;
+  $("bAudio").innerHTML = audio ? "■ Audio on" : "▶ Audio";
+  $("bAudio").classList.toggle("on", audio);
+  $("bAudio").classList.toggle("primary", !audio);
+  const muted = !!(st && st.muted);
+  $("bMute").innerHTML = muted ? "🔇 PC muted" : "🔈 Mute PC";
+  $("bMute").classList.toggle("danger", muted);
+  $("bMute").disabled = !on;
+}
+
+function renderStats() {
+  const st = S.status;
+  if (!st) { $("stats").innerHTML = "<span>not connected</span>"; return; }
+  $("stats").innerHTML = `<span>speed <b>${st.mhz_s} MHz/s</b> · ${st.w_s} w/s</span><span>ovf/timeouts <b>${st.ovf} / ${st.timeouts}</b></span>
+    <span>rejected <b>${st.rejected}</b></span><span>exclusions <b>${st.exclusions}</b></span><span>digi <b>${esc(st.digi)}</b></span>
+    <span>underruns <b>${st.underruns}</b></span><span>CPU <b>${st.cpu == null ? "-" : st.cpu + "%"}</b> · RAM <b>${st.ram_mb == null ? "-" : st.ram_mb + " MB"}</b></span>`;
+}
+
+// Each row: line 1 = frequency, mode, name; line 2 (phone) = the remaining columns with labels.
+function renderHistory() {
+  $("historyList").innerHTML = S.history.length === 0 ? `<div class="empty">no detections yet</div>` :
+    `<div class="lrow head"><span>Freq</span><span>Mode</span><span>Name</span><span>Time</span><span>Dur</span><span>Max SNR</span><span>Max RSSI</span></div>` +
+    S.history.map(h => `<div class="lrow">
+      <span class="f">${esc(h.label)}</span>${modeTag(h.mode)}<span class="n">${esc(h.name)}</span><span class="br"></span>
+      <span class="c">${esc(h.time)}</span><span class="c">${esc(h.dur)}</span>
+      <span class="c" data-l="SNR">${fix1(h.snr)} dB</span><span class="c">${fix1(h.rssi)} dBFS</span></div>`).join("");
+}
+
+function renderActivity() {
+  $("activityList").innerHTML = S.activity.length === 0 ? `<div class="empty">the activity log is empty</div>` :
+    `<div class="lrow head"><span>Freq</span><span>Mode</span><span>Name</span><span>Total</span><span>Session</span><span>Hits</span><span>Last</span></div>` +
+    S.activity.map((a, i) => `<div class="lrow" data-a="${i}">
+      <span class="f">${esc(a.label)}</span>${modeTag(a.mode)}<span class="n">${esc(a.name)}</span><span class="br"></span>
+      <span class="c" data-l="total">${esc(a.total)}</span><span class="c" data-l="session">${esc(a.session)}</span>
+      <span class="c" data-l="hits">${a.hits}</span><span class="c" data-l="last">${esc(a.last)}</span></div>`).join("");
+}
+
+function renderExcl() {
+  $("exclList").innerHTML = S.excl.length === 0 ? `<div class="empty">no exclusions</div>` :
+    `<div class="lrow head"><span>Freq</span><span>Name</span><span>Note</span><span></span></div>` +
+    S.excl.map((e, i) => `<div class="lrow">
+      <span class="f">${esc(e.label)}</span><span class="n">${esc(e.name)}</span><span class="br"></span>
+      <span class="c note">${e.note ? "# " + esc(e.note) : ""}</span>
+      <span><button class="smallbtn del" data-del="${i}">Delete</button></span></div>`).join("");
+  $("exclCount").textContent = S.excl.length + " entries";
+}
+
+/* ---- tabs, sheets ---- */
+function setTab(t) {
+  if (t === "main") document.body.dataset.tab = "main";
+  else { document.body.dataset.tab = "lists"; document.body.dataset.list = t; }
+  document.querySelectorAll("nav.tabs button").forEach(b => b.classList.toggle("active", b.dataset.t === t));
+  document.querySelectorAll(".listtabs button").forEach(b => b.classList.toggle("active", b.dataset.l === document.body.dataset.list));
+  if (document.body.dataset.list === "activity") send({ c: "activity" });
+}
+
+// The activity list is not pushed: it is asked for while visible.
+function activityVisible() {
+  const wide = matchMedia("(min-width: 960px) and (orientation: landscape)").matches;
+  return document.body.dataset.list === "activity" && (wide || document.body.dataset.tab !== "main") && !document.hidden;
+}
+setInterval(() => { if (activityVisible()) send({ c: "activity" }); }, 5000);
+
+function openSheet(id) { $(id).classList.add("open"); }
+function closeSheet(id) { $(id).classList.remove("open"); }
+let onConfirm = null;
+function confirmBox(title, text, yes) { $("cfTitle").textContent = title; $("cfText").textContent = text; onConfirm = yes; openSheet("confirm"); }
+$("cfYes").onclick = () => { closeSheet("confirm"); if (onConfirm) onConfirm(); };
+
+// Exclusion target, taken when the sheet opens (like the x key in the TUI).
+let exTarget = null;
+function openExclude(freq, channel, label, name, wide) {
+  exTarget = { freq, channel };
+  $("exFreq").textContent = label + " MHz";
+  $("exName").textContent = name || "";
+  $("exNote").value = "";
+  $("exWide").hidden = !wide;
+  openSheet("exSheet");
+}
+function doExclude(wide) {
+  if (!exTarget) return;
+  const note = $("exNote").value.trim();
+  send({ c: "exclude", freq: exTarget.freq, channel: exTarget.channel, wide, note: note || null });
+  closeSheet("exSheet");
+}
+$("exOne").onclick = () => doExclude(false);
+$("exWide").onclick = () => doExclude(true);
+
+let itTarget = null;
+$("activityList").onclick = e => {
+  const it = e.target.closest("[data-a]"); if (!it) return;
+  const a = S.activity[+it.dataset.a]; if (!a) return;
+  itTarget = a;
+  $("itFreq").textContent = a.label + " MHz";
+  $("itInfo").textContent = `total ${a.total} · ${a.hits} hits · last ${a.last}`;
+  $("itName").value = a.name || "";
+  $("itDigi").checked = a.mode === "DIGI";
+  openSheet("itemSheet");
+};
+$("itSave").onclick = () => {
+  if (!itTarget) return;
+  send({ c: "label", freq: itTarget.freq, name: $("itName").value, digi: $("itDigi").checked });
+  closeSheet("itemSheet");
+};
+$("itExclude").onclick = () => {
+  if (!itTarget) return;
+  closeSheet("itemSheet");
+  openExclude(itTarget.freq, null, itTarget.label, itTarget.name, false);
+};
+$("exclList").onclick = e => {
+  const b = e.target.closest("[data-del]"); if (!b) return;
+  const x = S.excl[+b.dataset.del]; if (!x) return;
+  confirmBox(`Delete exclusion ${x.label}?`, "The entry is removed from the exclusion file.", () => send({ c: "remove_exclusion", freq: x.freq }));
+};
+
+document.querySelectorAll("nav.tabs button").forEach(b => b.onclick = () => setTab(b.dataset.t));
+document.querySelectorAll(".listtabs button").forEach(b => b.onclick = () => setTab(b.dataset.l));
+document.querySelectorAll(".backdrop").forEach(bd => bd.onclick = e => {
+  if (e.target === bd || e.target.hasAttribute("data-close")) bd.classList.remove("open");
+});
+
+$("bPause").onclick = () => send({ c: "pause" });
+$("bSkip").onclick = () => send({ c: "skip" });
+$("bExclude").onclick = () => { const L = S.lock; if (L) openExclude(L.freq, L.channel, L.label, L.name, true); };
+$("bUndo").onclick = () => confirmBox("Undo the last exclusion?", "The last exclusion added in this session is removed.", () => send({ c: "undo" }));
+$("bSqUp").onclick = () => send({ c: "squelch", d: 1 });
+$("bSqDown").onclick = () => send({ c: "squelch", d: -1 });
+$("bNr").onclick = () => send({ c: "nr" });
+$("bNrUp").onclick = () => send({ c: "nr_step", d: 1 });
+$("bNrDown").onclick = () => send({ c: "nr_step", d: -1 });
+$("bMute").onclick = () => send({ c: "mute" });
+$("bAudio").onclick = () => { if (Audio_.ctx) Audio_.stop(); else Audio_.start(); renderControls(); };
+$("bClear").onclick = () => confirmBox("Clear the activity log?", "All entries are removed and the empty file is saved. This cannot be undone.", () => send({ c: "clear_activity" }));
+
+// Theme: dark by default; the choice is remembered per browser.
+// The browser and system bars follow the theme (the page background).
+function applyTheme(t) {
+  const light = t === "light";
+  document.documentElement.dataset.theme = light ? "light" : "dark";
+  document.querySelector('meta[name="theme-color"]').content = light ? "#f1f5e4" : "#1a1a1a";
+}
+try { applyTheme(localStorage.getItem("rfscan-theme")); } catch (e) {}
+$("bTheme").onclick = () => {
+  const t = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+  applyTheme(t);
+  try { localStorage.setItem("rfscan-theme", t); } catch (e) {}
+};
+
+// The dots after SCANNING move even when no message comes.
+setInterval(() => { if (S.status && !S.lock && S.status.state === "scanning") renderDisplay(); }, 400);
+
+setTab("main");
+render(); renderHistory(); renderActivity(); renderExcl();
+connect();
+</script>
+</body>
+</html>

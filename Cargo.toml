@@ -1,0 +1,37 @@
+[package]
+name = "rfscan"
+version = "0.1.0"
+edition = "2024"
+description = "Fast terminal radio scanner for SoapySDR receivers"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/b4sh/rfscan"
+
+[dependencies]
+anyhow = "1.0.104"
+axum = { version = "0.8.9", features = ["ws"] }
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+clap = { version = "4.6.7", features = ["derive"] }
+cpal = "0.18.2"
+cpu-time = "1.0.0"
+crossbeam-channel = "0.5.17"
+ctrlc = "3.5.2"
+directories = "6.0.0"
+memory-stats = "1.2.0"
+nnnoiseless = { version = "0.5.2", default-features = false }
+num-complex = "0.4"
+ratatui = "0.30.2"
+rtrb = "0.4.0"
+rustfft = "6.4.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+soapysdr = "0.5.1"
+soapysdr-sys = "0.8.1"
+thiserror = "2.0.21"
+tokio = { version = "1.54.0", default-features = false, features = ["rt", "net", "time", "sync", "macros"] }
+toml = "1.1.8"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
