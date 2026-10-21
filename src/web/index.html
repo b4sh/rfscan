@@ -133,6 +133,7 @@ body:not([data-tab="main"]) #main { display: none; }
 .bar .mark { position: absolute; top: 0; bottom: 0; width: 3px; background: var(--text); }
 .bar .mark.exit { background: var(--hang); }
 .barlegend { display: flex; justify-content: space-between; font-size: 11px; color: var(--dim); }
+.barlegend .exitlbl { color: var(--hang); }
 .kv { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; margin-top: 8px; font-size: 14px; }
 .kv > div { white-space: nowrap; overflow: hidden; }
 .kv span { color: var(--dim); }
@@ -279,7 +280,7 @@ body.nolocal #bAudio { grid-column: 1 / -1; }
         <div class="measure" id="dMeasure">
           <div class="snrrow"><div class="snrval"><span id="dSnr">-</span> <small>dB SNR</small></div><div class="meta">max <span id="dPeakSnr">-</span> dB</div></div>
           <div class="bar"><div class="fill" id="dFill"></div><div class="mark exit" id="dExit"></div><div class="mark" id="dEntry"></div></div>
-          <div class="barlegend"><span>0</span><span id="dLegend"></span><span>50 dB</span></div>
+          <div class="barlegend"><span>0</span><span><span id="dLegend"></span><span id="dLegendExit" class="exitlbl"></span></span><span>50 dB</span></div>
           <div class="kv">
             <div><span>RSSI</span> <b id="dRssi">-</b></div>
             <div><span>noise</span> <b id="dNoise">-</b></div>
@@ -599,7 +600,8 @@ function renderDisplay() {
   $("dFill").style.width = (L ? pct(L.snr) : 0) + "%";
   $("dEntry").style.left = (st ? pct(st.squelch) : 0) + "%";
   $("dExit").style.left = (st ? pct(st.squelch - st.hyst) : 0) + "%";
-  setText("dLegend", st ? `squelch ${st.squelch} · exit ${fix1(st.squelch - st.hyst)} (amber)` : "");
+  setText("dLegend", st ? `squelch ${st.squelch} · ` : "");
+  setText("dLegendExit", st ? `exit ${fix1(st.squelch - st.hyst)}` : "");
   setText("dRssi", L ? fix1(L.rssi) + " dBFS" : "-");
   setText("dNoise", L ? fix1(L.noise) + " dBFS" : "-");
   setText("dPeakRssi", L ? fix1(L.peak_rssi) + " dBFS" : "-");
