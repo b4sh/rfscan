@@ -4,8 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>rfscan</title>
-<!-- A shortcut on the home screen opens the page as an app, without the address bar. -->
-<link rel="manifest" href="{MANIFEST}">
+<!-- A shortcut on the home screen opens the page as an app, without the address bar.
+     The manifest is fetched with the page's credentials, so it also loads behind a reverse
+     proxy with a login (browsers fetch it without credentials by default). -->
+<link rel="manifest" href="{MANIFEST}" crossorigin="use-credentials">
 <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
 <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
