@@ -590,9 +590,7 @@ fn stats_compact(app: &App) -> String {
         s.map_or(0, |s| s.rejected),
         ctx.exclusions.lock().map_or(0, |l| l.len()),
         digi_state(app),
-        app.cpu
-            .percent
-            .map_or("-".to_string(), |p| format!("{p:.0}%")),
+        app.cpu.text("%", "/"),
         app.cpu
             .ram
             .map_or("-".to_string(), |b| format!("{}M", b >> 20)),
@@ -649,12 +647,7 @@ fn stats_lines(app: &App) -> Vec<Line<'static>> {
                 .load(std::sync::atomic::Ordering::Relaxed)
                 .to_string(),
         ),
-        item(
-            "CPU",
-            app.cpu
-                .percent
-                .map_or("-".to_string(), |p| format!("{p:.0} %")),
-        ),
+        item("CPU", app.cpu.text(" %", " / ")),
         item(
             "RAM",
             app.cpu

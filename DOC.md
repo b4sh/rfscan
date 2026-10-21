@@ -30,7 +30,35 @@ rfscan needs SoapySDR with the module (driver) of your receiver.
 - **RTL-SDR with PothosSDR:** the last PothosSDR (2021) has an old `rtlsdr.dll`, with which rfscan crashes when it closes an RTL-SDR (exit code 139; the scan itself works and everything is saved before). Replace `C:\Program Files\PothosSDR\bin\rtlsdr.dll` with the x64 `rtlsdr.dll` from a current [rtl-sdr-blog](https://github.com/rtlsdrblog/rtl-sdr-blog/releases) release (keep a copy of the old one), or put it next to `rfscan.exe`, which affects rfscan only.
 - **SDRplay with PothosSDR:** PothosSDR has the SDRplay API library 3.07 (`sdrplay_api.dll` from 2020), which does not work with a current SDRplay API service (no device found, the RSP is reset). Put the `sdrplay_api.dll` (x64) of your installed SDRplay API next to `rfscan.exe`; the module then warns that the version differs from its build version, but works (checked with API 3.15).
 
-**Linux.** Install SoapySDR with its development files and the modules of your receivers from the system packages (e.g. `libsoapysdr-dev` and `soapysdr-module-rtlsdr`, `soapysdr-module-airspy` on Debian and Ubuntu), then `cargo build --release`. Linux and the Raspberry Pi are not tested yet.
+**Linux, including the Raspberry Pi.** Tested on a Raspberry Pi 4 (4 GB) with Debian 13 (64-bit). Install SoapySDR with its development files, the modules of your receivers and the build tools from the system packages, then [Rust](https://rustup.rs/), and build rfscan:
+
+```
+sudo apt install build-essential pkg-config clang libclang-dev git libsoapysdr-dev soapysdr-module-rtlsdr soapysdr-module-airspy libasound2-dev
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+git clone https://github.com/b4sh/rfscan
+cd rfscan
+cargo build --release
+```
+
+The build takes about 7 minutes on a Raspberry Pi 4; the program is `target/release/rfscan`. The Airspy and RTL-SDR packages set up the USB access by themselves (udev rules), so the receivers work without root. An RTL-SDR is also taken by the kernel's DVB-T driver; librtlsdr detaches it when rfscan opens the receiver and attaches it again on exit, but after a few runs the stream may stop (`the stream delivers no samples`). Block the DVB-T driver once (the Debian packages do not do it): unplug the receiver, run
+
+```
+printf 'blacklist dvb_usb_rtl28xxu\nblacklist rtl2832_sdr\nblacklist rtl2832\n' | sudo tee /etc/modprobe.d/blacklist-rtlsdr.conf
+sudo modprobe -r dvb_usb_rtl28xxu rtl2832_sdr rtl2832
+```
+
+and plug it in again.
+
+**SDRplay on Linux.** The SDRplay API is not in the system packages. Install the API for Linux from [sdrplay.com/api](https://www.sdrplay.com/api/) (the installer `SDRplay_RSP_API-Linux-*.run` also covers the 64-bit Raspberry Pi; it asks you to accept the SDRplay license and installs the `sdrplay` service), then build the SoapySDR module:
+
+```
+git clone https://github.com/pothosware/SoapySDRPlay3
+cd SoapySDRPlay3 && cmake -S . -B build && cmake --build build -j4 && sudo cmake --install build && sudo ldconfig
+```
+
+It is installed to `/usr/local/lib/SoapySDR/modules0.8`, where SoapySDR finds it (`rfscan --list-devices` shows `sdrplay OK` among the loaded modules).
+
+On Linux `--list-devices` lists every ALSA device of a sound card (`hw:`, `plughw:`, `dmix:` ...), with its ALSA name in brackets, e.g. `--audio-device "plughw:CARD=Headphones"`. A Raspberry Pi without speakers runs with `--local-audio off` and plays the audio in the [web GUI](#web-gui).
 
 `rfscan --list-devices` shows the receivers SoapySDR sees, with their frequency ranges, sample rates, gain stages, sample format, driver settings and stream arguments, plus the SoapySDR version and module diagnostics (useful when no receiver is found). Sound cards (SoapySDR `driver=audio`) are listed but never used as receivers. `--device` chooses a receiver in Soapy syntax, e.g. `--device driver=rtlsdr` or `--device driver=airspy,serial=...`; without it rfscan takes the first free one.
 
@@ -51,7 +79,9 @@ Settings found so far (other receivers welcome):
 |---|---|---|
 | Airspy Mini | `--gain "agc=true,VGA=7"` (stream arguments not needed) | 20 ms |
 | RTL-SDR (R828D, rtl-sdr-blog driver) | `--sample-rate 2.4M --gain "TUNER=28" --stream-args "bufflen=16384,buffers=64"` | 63 ms (113-125 ms with the default stream buffers) |
-| SDRplay RSP1A (API 3.15) | `--sample-rate 6M --gain "agc=true"` (no stream arguments; above 6 MSps occasional overflows) | 63 ms (measured at 8 MSps) |
+| RTL-SDR (R828D) on a Raspberry Pi 4 (Debian librtlsdr 2.0) | the same | 63 ms (`--calibrate` on a carrier with an SNR of 33 dB suggests 23 ms, 88 ms with the default stream buffers; in a band with very strong signals ghosts stayed up to about 45 ms, while in a quiet band 30 ms worked) |
+| SDRplay RSP1A (API 3.15) | `--sample-rate 6M --gain "IFGR=43,RFGR=4"` (no stream arguments; above 6 MSps occasional overflows; `IFGR` is an attenuation, a higher value means less gain; the hardware AGC, `agc=true`, changes the gain while scanning, so the noise level jumps and the whole mini-spectrum rises for a while) | 63 ms (measured at 8 MSps) |
+| SDRplay RSP1A on a Raspberry Pi 4 (API 3.15.2, SoapySDRPlay3 0.5.2) | the same | 63 ms (`--calibrate` suggests 38 ms, but in a band with very strong signals ghosts stayed at 38 ms; clean from about 50 ms) |
 
 The gain depends on your antenna and location; the stream arguments and the settle depend on the receiver. All of these can be kept in the [configuration file](#configuration-file), one file per receiver if you have several.
 
@@ -184,6 +214,18 @@ rfscan --scan-range 438M-439M --digi --dsd-fme C:\Radio\dsd-fme\dsd-fme.exe
 ```
 
 rfscan starts DSD-FME in the background (without a window) and stops it on exit. Without `--dsd-fme` it looks for `dsd-fme` in `PATH`; if it is not found, rfscan exits with a message. The decoder is DSD-FME's auto detection (`-fa`: DMR, P25 phase 1, D-STAR, X2-TDMA, YSF); other systems and DSD-FME options go to `--dsd-fme-args`, e.g. `--dsd-fme-args "-fn"` for NXDN96 or `--dsd-fme-args "-fa -G group.csv"` for talkgroup names. The input, the output and the event log are always set by rfscan.
+
+On Linux DSD-FME is built from source with its vocoder library mbelib (read the patent notice in the [mbelib README](https://github.com/lwvmobile/mbelib#readme) first). On Debian 13, including a Raspberry Pi:
+
+```
+sudo apt install cmake libpulse-dev libsndfile1-dev libfftw3-dev liblapack-dev libusb-1.0-0-dev librtlsdr-dev libncurses-dev libcodec2-dev
+git clone https://github.com/lwvmobile/mbelib
+cd mbelib && git checkout ambe_tones && cmake -S . -B build && cmake --build build -j4 && sudo cmake --install build && sudo ldconfig && cd ..
+git clone https://github.com/lwvmobile/dsd-fme
+cd dsd-fme && cmake -S . -B build && cmake --build build -j4 && sudo cmake --install build && cd ..
+```
+
+This installs `dsd-fme` to `/usr/local/bin`, where rfscan finds it without `--dsd-fme`.
 
 DSD-FME's console output goes to `~/.config/rfscan/dsd-fme.log`; while the scanner is on a `digi` channel, the TUI shows its last lines in a window over the detection history (e.g. ` SLOT 1 TGT=1234 SRC=567 Group` for DMR). The event log of finished calls is in `~/.config/rfscan/dsd-fme-events.log`. `--dsd-fme-logs DIR` puts both files in another (existing) directory: needed when several rfscan instances run with `--digi`, e.g. one configuration file per receiver with its own `dsd-fme-logs`, `activity-file` and `device`. If DSD-FME exits during scanning, rfscan restarts it (at most 3 times per minute); the `[ DIGI ]` line on the lock screen and the `digi` statistic show its state and whether its voice is playing.
 

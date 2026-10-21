@@ -688,7 +688,10 @@ fn status_json(ctx: &UiContext, s: &Status, hub: &Hub) -> Value {
     } else {
         (name[..1].to_string(), name[1..].to_string())
     };
-    let (cpu, ram) = hub.cpu.lock().map_or((None, None), |c| (c.percent, c.ram));
+    let (cpu, temp, ram) = hub
+        .cpu
+        .lock()
+        .map_or((None, None, None), |c| (c.percent, c.temp, c.ram));
     let state = match s.state {
         ScanState::Scanning => "scanning",
         ScanState::Locked => "locked",
@@ -716,6 +719,7 @@ fn status_json(ctx: &UiContext, s: &Status, hub: &Hub) -> Value {
         "nr_strength": ctx.nr_strength.load(Ordering::Relaxed),
         "underruns": ctx.underruns.load(Ordering::Relaxed),
         "cpu": cpu.map(|p| p.round()),
+        "temp": temp.map(|t| t.round()),
         "ram_mb": ram.map(|b| b >> 20),
         "exclusions": ctx.exclusions.lock().map_or(0, |l| l.len()),
         "digi": digi_state(ctx),

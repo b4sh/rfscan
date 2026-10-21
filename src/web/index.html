@@ -647,7 +647,7 @@ function renderStats() {
   if (!st) { $("stats").innerHTML = "<span>not connected</span>"; return; }
   $("stats").innerHTML = `<span>speed <b>${st.mhz_s} MHz/s</b> · ${st.w_s} w/s</span><span>ovf/timeouts <b>${st.ovf} / ${st.timeouts}</b></span>
     <span>rejected <b>${st.rejected}</b></span><span>exclusions <b>${st.exclusions}</b></span><span>digi <b>${esc(st.digi)}</b></span>
-    <span>underruns <b>${st.underruns}</b></span><span>CPU <b>${st.cpu == null ? "-" : st.cpu + "%"}</b> · RAM <b>${st.ram_mb == null ? "-" : st.ram_mb + " MB"}</b></span>`;
+    <span>underruns <b>${st.underruns}</b></span><span>CPU <b>${st.cpu == null ? "-" : st.cpu + "%" + (st.temp == null ? "" : " / " + st.temp + "C")}</b> · RAM <b>${st.ram_mb == null ? "-" : st.ram_mb + " MB"}</b></span>`;
 }
 
 // Each row: line 1 = frequency, mode, name; line 2 (phone) = the remaining columns with labels.

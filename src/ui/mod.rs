@@ -247,11 +247,16 @@ enum Screen {
     Exclusions,
 }
 
-/// Program CPU usage (percent of one core) and physical memory (working set / RSS, bytes),
-/// measured once per second.
+/// Linux thermal zone of the processor (millidegrees Celsius); missing on Windows and on
+/// computers without a sensor, then no temperature is shown.
+const CPU_TEMP_FILE: &str = "/sys/class/thermal/thermal_zone0/temp";
+
+/// Program CPU usage (percent of one core), processor temperature (°C) and physical memory
+/// (working set / RSS, bytes), measured once per second.
 pub(crate) struct CpuMeter {
     last: Option<(Instant, Duration)>,
     pub(crate) percent: Option<f64>,
+    pub(crate) temp: Option<f64>,
     pub(crate) ram: Option<usize>,
 }
 
@@ -260,6 +265,7 @@ impl CpuMeter {
         CpuMeter {
             last: None,
             percent: None,
+            temp: None,
             ram: None,
         }
     }
@@ -278,7 +284,21 @@ impl CpuMeter {
             Some(_) => return,
             None => self.last = Some((now, cpu)),
         }
+        self.temp = std::fs::read_to_string(CPU_TEMP_FILE)
+            .ok()
+            .and_then(|s| s.trim().parse::<f64>().ok())
+            .map(|m| m / 1000.0);
         self.ram = memory_stats::memory_stats().map(|m| m.physical_mem);
+    }
+
+    /// `9 %` or, with a temperature, `9 % / 48C`; `sep` and `unit` set the spacing for the
+    /// one-line statistics (`9%/48C`).
+    pub(crate) fn text(&self, unit: &str, sep: &str) -> String {
+        match (self.percent, self.temp) {
+            (None, _) => "-".to_string(),
+            (Some(p), None) => format!("{p:.0}{unit}"),
+            (Some(p), Some(t)) => format!("{p:.0}{unit}{sep}{t:.0}C"),
+        }
     }
 }
 
@@ -679,6 +699,7 @@ mod tests {
             cpu: CpuMeter {
                 last: None,
                 percent: Some(9.0),
+                temp: None,
                 ram: Some(48 << 20),
             },
             edit: None,

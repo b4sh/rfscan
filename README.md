@@ -18,13 +18,13 @@ It works with any receiver supported by [SoapySDR](https://github.com/pothosware
 
 ## Tested receivers
 
-| Receiver | Settings that worked | Speed |
-|---|---|---|
-| Airspy Mini | `--gain "agc=true,VGA=7" --settle 20` | about 220 MHz/s at 6 MSps |
-| RTL-SDR (R828D, rtl-sdr-blog driver) | `--sample-rate 2.4M --gain "TUNER=28" --stream-args "bufflen=16384,buffers=64" --settle 63` | about 20 MHz/s at 2.4 MSps |
-| SDRplay RSP1A (API 3.15) | `--sample-rate 6M --gain "agc=true" --settle 63` | about 90 MHz/s (measured at 8 MSps) |
+| Receiver | Settings that worked | Speed, Windows 11 PC | Speed, Raspberry Pi 4 |
+|---|---|---|---|
+| Airspy Mini | `--gain "agc=true,VGA=7" --settle 20` | about 220 MHz/s at 6 MSps | about 225 MHz/s at 6 MSps |
+| RTL-SDR (R828D) | `--sample-rate 2.4M --gain "TUNER=28" --stream-args "bufflen=16384,buffers=64" --settle 63` | about 20 MHz/s at 2.4 MSps | about 28 MHz/s at 2.4 MSps |
+| SDRplay RSP1A (API 3.15) | `--sample-rate 6M --gain "IFGR=43,RFGR=4" --settle 63` | about 90 MHz/s (measured at 8 MSps) | about 67 MHz/s at 6 MSps |
 
-Tested on Windows 11. Linux, including the Raspberry Pi 4, is planned. Other SoapySDR receivers should work without code changes: rfscan reads all limits (frequencies, sample rates, gain stages, sample format) from the device. Reports about other receivers are welcome.
+Tested on Windows 11 and on a Raspberry Pi 4 (4 GB, Debian 13 64-bit). On the Raspberry Pi the scan is as fast as on a PC: the speed is limited by the receiver (retune and settle time), not by the computer. Other SoapySDR receivers should work without code changes: rfscan reads all limits (frequencies, sample rates, gain stages, sample format) from the device. Reports about other receivers are welcome.
 
 ## Quick start
 

@@ -220,51 +220,73 @@ impl Drop for SilentClock {
     }
 }
 
-fn device_name(d: &cpal::Device) -> String {
-    d.description()
-        .map(|d| d.name().to_string())
-        .unwrap_or_else(|_| "?".into())
+/// Device names, unique in the list: a description shared by several devices (ALSA gives every
+/// PCM of a card, `hw:`, `plughw:`, `dmix:`..., the same one) gets the driver's device name in
+/// brackets.
+fn device_names(devices: &[cpal::Device]) -> Vec<String> {
+    let descs: Vec<Option<cpal::DeviceDescription>> =
+        devices.iter().map(|d| d.description().ok()).collect();
+    let base = |desc: &Option<cpal::DeviceDescription>| {
+        desc.as_ref().map_or("?", |d| d.name()).to_string()
+    };
+    descs
+        .iter()
+        .map(|desc| {
+            let name = base(desc);
+            let shared = descs.iter().filter(|o| base(o) == name).count() > 1;
+            match desc.as_ref().and_then(|d| d.driver()) {
+                Some(driver) if shared && driver != name => format!("{name} [{driver}]"),
+                _ => name,
+            }
+        })
+        .collect()
+}
+
+fn output_devices(host: &cpal::Host) -> Result<Vec<cpal::Device>, String> {
+    Ok(host
+        .output_devices()
+        .map_err(|e| format!("audio device list: {e}"))?
+        .collect())
 }
 
 /// Audio output device names; `true` for the default one.
 pub fn list_outputs() -> Result<Vec<(String, bool)>, String> {
     let host = cpal::default_host();
-    let default = host.default_output_device().map(|d| device_name(&d));
-    let devices = host
-        .output_devices()
-        .map_err(|e| format!("audio device list: {e}"))?;
-    Ok(devices
-        .map(|d| {
-            let name = device_name(&d);
-            let is_default = default.as_deref() == Some(name.as_str());
+    let default = host.default_output_device().and_then(|d| d.id().ok());
+    let devices = output_devices(&host)?;
+    Ok(device_names(&devices)
+        .into_iter()
+        .zip(&devices)
+        .map(|(name, d)| {
+            let is_default = default.is_some() && d.id().ok() == default;
             (name, is_default)
         })
         .collect())
 }
 
 /// Device with the given name: first the exact name, then the only match of a fragment
-/// (case-insensitive). Without a name: the system default output.
-fn find_device(host: &cpal::Host, wanted: Option<&str>) -> Result<cpal::Device, String> {
+/// (case-insensitive). Without a name: the system default output. Returns the device and its
+/// name.
+fn find_device(host: &cpal::Host, wanted: Option<&str>) -> Result<(cpal::Device, String), String> {
     let Some(wanted) = wanted else {
-        return host
+        let d = host
             .default_output_device()
-            .ok_or_else(|| "no default audio output device".into());
+            .ok_or("no default audio output device")?;
+        let name = device_names(std::slice::from_ref(&d)).swap_remove(0);
+        return Ok((d, name));
     };
-    let devices: Vec<cpal::Device> = host
-        .output_devices()
-        .map_err(|e| format!("audio device list: {e}"))?
-        .collect();
-    let names: Vec<String> = devices.iter().map(device_name).collect();
+    let devices = output_devices(host)?;
+    let names = device_names(&devices);
     let list = || names.join(", ");
     if let Some(i) = names.iter().position(|n| n == wanted) {
-        return Ok(devices[i].clone());
+        return Ok((devices[i].clone(), names[i].clone()));
     }
     let w = wanted.to_lowercase();
     let hits: Vec<usize> = (0..names.len())
         .filter(|&i| names[i].to_lowercase().contains(&w))
         .collect();
     match hits.as_slice() {
-        [i] => Ok(devices[*i].clone()),
+        [i] => Ok((devices[*i].clone(), names[*i].clone())),
         [] => Err(format!(
             "no audio output matches '{wanted}'; available: {}",
             list()
@@ -300,17 +322,17 @@ impl AudioOut {
     pub fn open(wanted: Option<&str>, local: bool, web: bool) -> Result<Opened, String> {
         let output = if local {
             let host = cpal::default_host();
-            let device = find_device(&host, wanted)?;
+            let (device, name) = find_device(&host, wanted)?;
             let supported = device
                 .default_output_config()
-                .map_err(|e| format!("audio device {}: {e}", device_name(&device)))?;
-            Some((device, supported))
+                .map_err(|e| format!("audio device {name}: {e}"))?;
+            Some((device, name, supported))
         } else {
             None
         };
         let (name, rate, channels) = match &output {
-            Some((d, s)) => (
-                device_name(d),
+            Some((_, n, s)) => (
+                n.clone(),
                 s.config().sample_rate as f64,
                 s.config().channels as usize,
             ),
@@ -347,7 +369,7 @@ impl AudioOut {
             web: web_tx,
         };
         let (stream, clock) = match output {
-            Some((device, supported)) => {
+            Some((device, _, supported)) => {
                 let config = supported.config();
                 let stream = match supported.sample_format() {
                     cpal::SampleFormat::F32 => run::<f32>(&device, config, mixer),
