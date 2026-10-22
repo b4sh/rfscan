@@ -1,0 +1,525 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rfscan: fast SDR radio scanner</title>
+<meta name="description" content="A fast radio scanner for SDR receivers, running in the terminal. Sweeps whole bands in wide FFT windows, stops on a signal, plays AM, NFM and digital voice, and has a web GUI for your phone.">
+<meta property="og:title" content="rfscan: fast SDR radio scanner">
+<meta property="og:description" content="Scan whole bands in seconds with an Airspy, RTL-SDR or SDRplay. Terminal UI, console mode and a web GUI for your phone.">
+<meta property="og:image" content="https://b4sh.github.io/rfscan/img/logo-256.png">
+<meta name="theme-color" content="#0b1626">
+<link rel="icon" type="image/png" href="img/logo-180.png">
+<link rel="apple-touch-icon" href="img/logo-180.png">
+<style>
+:root {
+  --bg: #0b1626;
+  --bg2: #0f1e33;
+  --card: #13243c;
+  --line: #213856;
+  --text: #e8f0fa;
+  --dim: #9fb3cc;
+  --faint: #5f7896;
+  --blue: #2e8cff;
+  --cyan: #38c8ff;
+  --green: #8fd14f;
+  --amber: #e5bf4c;
+  --mono: ui-monospace, "Cascadia Mono", "JetBrains Mono", Consolas, Menlo, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --radius: 14px;
+  --wrap: 1120px;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 17px/1.6 var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--cyan); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code, pre { font-family: var(--mono); }
+.wrap { max-width: var(--wrap); margin: 0 auto; padding: 0 20px; }
+
+/* Navigation */
+nav {
+  position: sticky; top: 0; z-index: 10;
+  background: rgba(11, 22, 38, .82);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--line);
+}
+nav .wrap { display: flex; align-items: center; gap: 24px; height: 58px; }
+nav .brand { display: flex; align-items: center; gap: 10px; color: var(--text); font-weight: 700; font-size: 18px; }
+nav .brand img { width: 30px; height: 30px; border-radius: 7px; }
+nav .links { display: flex; gap: 22px; margin-left: auto; font-size: 15px; }
+nav .links a { color: var(--dim); }
+nav .links a:hover { color: var(--text); text-decoration: none; }
+@media (max-width: 720px) { nav .links a.opt { display: none; } }
+
+/* Hero */
+.hero { position: relative; overflow: hidden; padding: 72px 0 40px; }
+.hero::before {
+  content: ""; position: absolute; inset: -40% -10% auto; height: 120%;
+  background:
+    radial-gradient(closest-side, rgba(46, 140, 255, .22), transparent 70%) 20% 30% / 60% 70% no-repeat,
+    radial-gradient(closest-side, rgba(143, 209, 79, .14), transparent 70%) 85% 20% / 45% 60% no-repeat;
+  pointer-events: none;
+}
+.hero .wrap { position: relative; }
+.hero .top { display: grid; grid-template-columns: 1.1fr .9fr; gap: 48px; align-items: center; }
+.hero h1 { font-size: clamp(38px, 6vw, 64px); line-height: 1.05; margin: 0 0 20px; letter-spacing: -.02em; }
+.hero h1 .g { background: linear-gradient(90deg, var(--blue), var(--green)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.hero p.lead { font-size: 20px; color: var(--dim); margin: 0 0 30px; max-width: 34em; }
+.hero .logo { justify-self: center; width: min(300px, 70vw); height: auto; aspect-ratio: 1; filter: drop-shadow(0 20px 50px rgba(46, 140, 255, .35)); }
+.cta { display: flex; flex-wrap: wrap; gap: 12px; }
+.btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 12px 22px; border-radius: 999px; font-weight: 600; font-size: 16px;
+  border: 1px solid var(--line); color: var(--text); background: var(--card);
+}
+.btn:hover { text-decoration: none; border-color: var(--faint); }
+.btn.primary { background: linear-gradient(90deg, var(--blue), #3fa3ff); border-color: transparent; color: #fff; }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn svg { width: 18px; height: 18px; }
+.badges { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 28px; }
+.badge { font-size: 13px; color: var(--dim); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; }
+@media (max-width: 860px) {
+  .hero { padding-top: 40px; }
+  .hero .top { grid-template-columns: 1fr; gap: 28px; }
+  .hero .top > * { min-width: 0; }
+  .hero .logo { order: -1; width: 180px; }
+}
+
+/* Spectrum demo */
+.scope {
+  margin-top: 48px;
+  background: linear-gradient(180deg, #08111e, #0b1828);
+  border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 16px 18px 12px;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, .35);
+}
+.scope .head, .scope .foot { display: flex; justify-content: space-between; gap: 12px; font: 13px var(--mono); color: var(--faint); }
+.scope .head .st { color: var(--cyan); font-weight: 700; }
+.scope .head .st.lock { color: var(--green); }
+.scope canvas { display: block; width: 100%; height: 180px; margin: 10px 0 6px; }
+@media (max-width: 600px) { .scope canvas { height: 130px; } .scope .head .opt { display: none; } }
+
+/* Sections */
+section { padding: 84px 0; }
+section.alt { background: var(--bg2); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+h2 { font-size: clamp(28px, 4vw, 40px); line-height: 1.15; margin: 0 0 14px; letter-spacing: -.01em; }
+.sub { color: var(--dim); font-size: 19px; max-width: 42em; margin: 0 0 44px; }
+
+/* Feature grid */
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+@media (max-width: 960px) { .grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 620px) { .grid { grid-template-columns: 1fr; } }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 24px; }
+.card h3 { margin: 12px 0 8px; font-size: 19px; }
+.card p { margin: 0; color: var(--dim); font-size: 16px; }
+.card .ic {
+  width: 44px; height: 44px; border-radius: 11px; display: grid; place-items: center;
+  background: rgba(46, 140, 255, .14); color: var(--cyan);
+}
+.card .ic.g { background: rgba(143, 209, 79, .14); color: var(--green); }
+.card .ic svg { width: 24px; height: 24px; }
+
+/* Screenshots */
+.shots { display: grid; grid-template-columns: 1fr 300px; gap: 36px; align-items: center; }
+@media (max-width: 900px) { .shots { grid-template-columns: 1fr; } }
+.shot { margin: 0; }
+.shot img { display: block; width: 100%; height: auto; border-radius: 10px; border: 1px solid var(--line); box-shadow: 0 24px 60px rgba(0, 0, 0, .4); }
+#dmr { padding-bottom: 0; }
+.shot.video { max-width: 820px; margin: 0 auto; }
+.shot video { display: block; width: 100%; height: auto; border-radius: 10px; border: 1px solid var(--line); background: #000; box-shadow: 0 24px 60px rgba(0, 0, 0, .4); }
+.shot figcaption { color: var(--faint); font-size: 14px; margin-top: 12px; text-align: center; }
+.phone {
+  width: 280px; max-width: 100%; margin: 0 auto;
+  border-radius: 38px; padding: 12px; background: #050a12;
+  border: 1px solid var(--line); box-shadow: 0 24px 60px rgba(0, 0, 0, .45);
+}
+.phone .screen { border-radius: 28px; overflow: hidden; background: #1a1a1a; }
+.phone .screen img { width: 100%; height: auto; border: 0; border-radius: 0; box-shadow: none; }
+
+/* Receivers table */
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); }
+table { width: 100%; border-collapse: collapse; font-size: 15px; min-width: 640px; }
+th, td { text-align: left; padding: 14px 18px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--faint); font-weight: 600; font-size: 13px; text-transform: uppercase; letter-spacing: .06em; background: var(--card); }
+tr:last-child td { border-bottom: 0; }
+td .speed { font: 700 22px var(--mono); color: var(--green); white-space: nowrap; }
+td .unit { color: var(--faint); font-size: 13px; }
+td code { font-size: 13px; color: var(--dim); word-break: break-word; }
+.note { color: var(--faint); font-size: 15px; margin-top: 18px; }
+
+/* Steps and code */
+.steps { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; counter-reset: step; }
+@media (max-width: 800px) { .steps { grid-template-columns: 1fr; } }
+.step { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 22px 24px; min-width: 0; }
+.step h3 { margin: 0 0 8px; font-size: 18px; display: flex; align-items: center; gap: 12px; }
+.step h3::before {
+  counter-increment: step; content: counter(step);
+  flex: none; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--blue); color: #fff; font-size: 14px;
+}
+.step p { margin: 0 0 12px; color: var(--dim); font-size: 16px; }
+pre {
+  margin: 0; padding: 14px 16px; overflow-x: auto;
+  background: #070e19; border: 1px solid var(--line); border-radius: 10px;
+  font-size: 14px; line-height: 1.55; color: var(--text);
+}
+pre .c { color: var(--faint); }
+pre .p { color: var(--green); user-select: none; }
+
+/* Footer */
+footer { padding: 48px 0 60px; color: var(--faint); font-size: 14px; }
+footer .wrap { display: flex; flex-wrap: wrap; gap: 18px 36px; justify-content: space-between; }
+footer a { color: var(--dim); }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="#"><img src="img/logo-180.png" alt="">rfscan</a>
+    <div class="links">
+      <a class="opt" href="#features">Features</a>
+      <a class="opt" href="#receivers">Receivers</a>
+      <a href="#start">Get started</a>
+      <a href="https://github.com/b4sh/rfscan">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap top">
+    <div>
+      <h1>Scan whole bands <span class="g">in seconds.</span></h1>
+      <p class="lead">rfscan is a fast radio scanner for SDR receivers. It sweeps frequency ranges in wide FFT windows, stops on a signal, plays it (AM, narrowband FM and digital voice) and goes on scanning when the transmission ends. Runs in a terminal, and a web GUI puts it on your phone.</p>
+      <div class="cta">
+        <a class="btn primary" href="https://github.com/b4sh/rfscan/releases/latest">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-5-5m5 5l5-5M4 21h16"/></svg>
+          Download
+        </a>
+        <a class="btn" href="https://github.com/b4sh/rfscan">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.53-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.42-2.7 5.4-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5z"/></svg>
+          Source on GitHub
+        </a>
+      </div>
+      <div class="badges">
+        <span class="badge">Windows</span>
+        <span class="badge">Linux</span>
+        <span class="badge">Raspberry Pi</span>
+        <span class="badge">Rust</span>
+        <span class="badge">AGPL-3.0</span>
+      </div>
+    </div>
+    <img class="logo" src="img/logo-256.png" width="256" height="256" alt="rfscan logo">
+  </div>
+
+  <div class="wrap">
+    <div class="scope" aria-hidden="true">
+      <div class="head">
+        <span>window <span id="sWin">A0</span> · <span id="sRange">144.000-146.000 MHz</span></span>
+        <span class="opt">squelch 18 dB SNR</span>
+        <span class="st" id="sState">● SCANNING</span>
+      </div>
+      <canvas id="scope"></canvas>
+      <div class="foot"><span id="sLo">144.0</span><span id="sInfo">noise floor measured per window</span><span id="sHi">146.0 MHz</span></div>
+    </div>
+  </div>
+</header>
+
+<section id="features">
+  <div class="wrap">
+    <h2>Built for speed, tuned for listening</h2>
+    <p class="sub">A classic scanner checks one channel at a time. rfscan checks a whole window of channels with every retune, and only stops for real signals.</p>
+    <div class="grid">
+      <div class="card">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 20h18M6 16v-4M10 16V6M14 16v-7M18 16v-3"/></svg></div>
+        <h3>Wide windows, not single channels</h3>
+        <p>One tuner setting covers about 80% of the sample rate, e.g. 4.8 MHz at 6 MSps. An FFT measures every channel in the window at once: about 220 MHz per second on an Airspy Mini.</p>
+      </div>
+      <div class="card">
+        <div class="ic g"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l5-5 4 4 8-9"/><path d="M3 21h18" opacity=".5"/></svg></div>
+        <h3>Detection by signal-to-noise ratio</h3>
+        <p>The noise floor is measured in every window, and a channel a set number of dB above it stops the scanner, whatever the gain or the antenna.</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/><path d="M9 12l2 2 4-4"/></svg></div>
+        <h3>No stops on receiver artifacts</h3>
+        <p>Every hit is confirmed at a different tuner frequency, so images and spurs of the receiver are rejected, and the DC spike never falls on a channel.</p>
+      </div>
+      <div class="card">
+        <div class="ic g"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></svg></div>
+        <h3>Clean audio</h3>
+        <p>AM and narrowband FM, a 300-3000 Hz voice filter, AGC so stations sound equally loud, RNNoise speech noise reduction and a limiter.</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 12h2l2-6 3 12 3-9 2 3h4"/></svg></div>
+        <h3>Digital voice</h3>
+        <p>DMR, P25, D-STAR, YSF, NXDN and more are played through <a href="https://github.com/lwvmobile/dsd-fme">DSD-FME</a>.</p>
+      </div>
+      <div class="card">
+        <div class="ic g"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg></div>
+        <h3>Terminal, console or phone</h3>
+        <p>A text interface, a plain console mode for logs and scripts, and a web GUI to watch, hear and control the scanner from a phone.</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h10M4 18h7"/></svg></div>
+        <h3>Knows your band</h3>
+        <p>A channel file names frequencies and sets their modes, one key excludes interference, and an activity log counts how long each frequency was on the air.</p>
+      </div>
+      <div class="card">
+        <div class="ic g"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10v4M11 10v4M15 10h2M15 14h2"/></svg></div>
+        <h3>Any SoapySDR receiver</h3>
+        <p>Frequency limits, sample rates, gain stages and sample format come from the device. Tested with Airspy, RTL-SDR and SDRplay.</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 1v4M15 1v4M9 19v4M15 19v4M1 9h4M1 15h4M19 9h4M19 15h4"/></svg></div>
+        <h3>Runs on a Raspberry Pi</h3>
+        <p>On a Raspberry Pi 4 the scan is as fast as on a PC: the speed is set by the receiver, not the computer. A small always-on scanner with a phone as its screen.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="alt" id="screens">
+  <div class="wrap">
+    <h2>In the terminal and in your pocket</h2>
+    <p class="sub">The TUI shows the window being scanned, the noise floor, the detection history and the statistics. The web GUI gives you the same scanner, with audio, on a phone.</p>
+    <div class="shots">
+      <figure class="shot">
+        <img src="img/screenshot-tui.png" width="1177" height="856" loading="lazy" alt="rfscan scanning the 2 m band in the terminal">
+        <figcaption>The TUI scanning the 2 m band with an Airspy Mini</figcaption>
+      </figure>
+      <figure class="shot">
+        <div class="phone"><div class="screen">
+          <img src="img/screenshot-web.png" width="426" height="853" loading="lazy" alt="The rfscan web GUI on a phone, scanning the 2 m band">
+        </div></div>
+        <figcaption>The web GUI on a phone, with an SDRplay RSP1A</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section id="dmr">
+  <div class="wrap">
+    <h2>Digital voice, decoded live</h2>
+    <p class="sub">rfscan stops on a DMR signal from a hotspot and hands it to DSD-FME. Turn the sound on.</p>
+    <figure class="shot video">
+      <video controls preload="metadata" playsinline width="960" height="720" poster="img/dmr-poster.jpg">
+        <source src="img/rfscan-dmr.mp4" type="video/mp4">
+      </video>
+      <figcaption>An Airspy Mini locked on a DMR hotspot, voice played through DSD-FME</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="receivers">
+  <div class="wrap">
+    <h2>Tested receivers</h2>
+    <p class="sub">Measured scan speeds with the settings that worked. Other SoapySDR receivers should work without code changes.</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Receiver</th><th>Windows 11 PC</th><th>Raspberry Pi 4</th><th>Settings</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Airspy Mini</strong></td>
+            <td><span class="speed">220</span> <span class="unit">MHz/s · 6 MSps</span></td>
+            <td><span class="speed">225</span> <span class="unit">MHz/s · 6 MSps</span></td>
+            <td><code>--gain "agc=true,VGA=7" --settle 20</code></td>
+          </tr>
+          <tr>
+            <td><strong>SDRplay RSP1A</strong></td>
+            <td><span class="speed">90</span> <span class="unit">MHz/s · 8 MSps</span></td>
+            <td><span class="speed">67</span> <span class="unit">MHz/s · 6 MSps</span></td>
+            <td><code>--sample-rate 6M --gain "IFGR=43,RFGR=4" --settle 63</code></td>
+          </tr>
+          <tr>
+            <td><strong>RTL-SDR</strong> (R828D)</td>
+            <td><span class="speed">20</span> <span class="unit">MHz/s · 2.4 MSps</span></td>
+            <td><span class="speed">28</span> <span class="unit">MHz/s · 2.4 MSps</span></td>
+            <td><code>--sample-rate 2.4M --gain "TUNER=28" --stream-args "bufflen=16384,buffers=64" --settle 63</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">Raspberry Pi 4, 4 GB, Debian 13 64-bit. Reports about other receivers are welcome.</p>
+  </div>
+</section>
+
+<section class="alt" id="start">
+  <div class="wrap">
+    <h2>Get started</h2>
+    <p class="sub">On Windows, download the zip from the releases page: <code>rfscan.exe</code> comes with SoapySDR and the receiver drivers. On Linux and the Raspberry Pi, build it from source with Cargo.</p>
+    <div class="steps">
+      <div class="step">
+        <h3>Check that the receiver is seen</h3>
+        <p>Lists the devices with their gain stages and settings.</p>
+        <pre><span class="p">$ </span>rfscan --list-devices</pre>
+      </div>
+      <div class="step">
+        <h3>Measure the settle time</h3>
+        <p>How long the receiver needs after a retune. Needs a strong constant signal in the range.</p>
+        <pre><span class="p">$ </span>rfscan --calibrate --gain "..." --scan-range 144M-146M</pre>
+      </div>
+      <div class="step">
+        <h3>Save your settings</h3>
+        <p>Writes a config file with all options commented out: set your gain, settle time and sample rate once.</p>
+        <pre><span class="p">$ </span>rfscan --gen-conf</pre>
+      </div>
+      <div class="step">
+        <h3>Scan</h3>
+        <p>Frequency ranges or single channels, with a web page for the phone if you like.</p>
+        <pre><span class="p">$ </span>rfscan --scan-range 144M-146M
+<span class="p">$ </span>rfscan --scan-range 118M-137M:am
+<span class="p">$ </span>rfscan --web-gui 0.0.0.0:8080</pre>
+      </div>
+    </div>
+    <p class="note">Gain is the most important setting, and rfscan cannot guess it. The full guide is in <a href="https://github.com/b4sh/rfscan#quick-start">README</a> and <a href="https://github.com/b4sh/rfscan/blob/main/DOC.md">DOC.md</a>.</p>
+    <div class="cta" style="margin-top:28px">
+      <a class="btn primary" href="https://github.com/b4sh/rfscan/releases/latest">Download the latest release</a>
+      <a class="btn" href="https://github.com/b4sh/rfscan/blob/main/DOC.md#installation">Build from source</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>rfscan © 2026 SQ1KW Chris · free software under the <a href="https://github.com/b4sh/rfscan/blob/main/LICENSE">GNU AGPL v3</a></span>
+    <span><a href="https://github.com/b4sh/rfscan">GitHub</a> · <a href="https://github.com/b4sh/rfscan/releases">Releases</a> · <a href="https://github.com/b4sh/rfscan/issues">Issues</a></span>
+  </div>
+</footer>
+
+<script>
+// A simulated scan for the hero: the window sweeps the band, stops on a signal
+// above the squelch and plays it, then goes on.
+(() => {
+  const canvas = document.getElementById("scope");
+  const ctx = canvas.getContext("2d");
+  const $ = id => document.getElementById(id);
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  const LO = 144.0, HI = 146.0, STEP = 0.0125;
+  const N = Math.round((HI - LO) / STEP);
+  const WIN = 40;                      // channels per window
+  const SQUELCH = 18;
+  const noise = new Float32Array(N);
+  const level = new Float32Array(N);
+  let signals = [];                    // { ch, snr, until }
+  let win = 0, state = "scan", stateUntil = 0, lockCh = -1, last = 0;
+
+  function resize() {
+    const r = canvas.getBoundingClientRect();
+    const dpr = Math.min(devicePixelRatio || 1, 2);
+    canvas.width = Math.round(r.width * dpr);
+    canvas.height = Math.round(r.height * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  function spawn(now) {
+    if (signals.length < 3 && Math.random() < 0.02) {
+      const ch = Math.floor(Math.random() * (N - 4)) + 2;
+      const strong = Math.random() < 0.6;
+      signals.push({ ch, snr: strong ? 22 + Math.random() * 14 : 8 + Math.random() * 7, until: now + 3000 + Math.random() * 6000 });
+    }
+    signals = signals.filter(s => s.until > now);
+  }
+
+  function update(now) {
+    for (let i = 0; i < N; i++) noise[i] = 2 + Math.random() * 3;
+    level.set(noise);
+    for (const s of signals) {
+      for (let d = -2; d <= 2; d++) {
+        const i = s.ch + d;
+        if (i >= 0 && i < N) level[i] = Math.max(level[i], s.snr - Math.abs(d) * 9 + Math.random() * 2);
+      }
+    }
+    const nWin = Math.ceil(N / WIN);
+    if (state === "scan" && now > stateUntil) {
+      win = (win + 1) % nWin;
+      stateUntil = now + 220;
+      const a = win * WIN, b = Math.min(N, a + WIN);
+      const hit = signals.find(s => s.ch >= a && s.ch < b && s.snr >= SQUELCH);
+      if (hit) { state = "lock"; lockCh = hit.ch; }
+    } else if (state === "lock") {
+      const s = signals.find(s => s.ch === lockCh);
+      if (!s) { state = "hang"; stateUntil = now + 1200; }
+    } else if (state === "hang" && now > stateUntil) {
+      state = "scan";
+    }
+  }
+
+  function freq(i) { return (LO + i * STEP).toFixed(4); }
+
+  function draw() {
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    const top = 8, base = h - 4, scale = (base - top) / 40;
+    ctx.clearRect(0, 0, w, h);
+    const cw = w / N;
+    const a = win * WIN, b = Math.min(N, a + WIN);
+
+    // window being measured
+    ctx.fillStyle = "rgba(46, 140, 255, 0.10)";
+    ctx.fillRect(a * cw, 0, (b - a) * cw, h);
+    ctx.strokeStyle = "rgba(56, 200, 255, 0.45)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(a * cw + .5, .5, (b - a) * cw - 1, h - 1);
+
+    // squelch line
+    const sy = base - SQUELCH * scale;
+    ctx.setLineDash([4, 4]);
+    ctx.strokeStyle = "rgba(229, 191, 76, 0.55)";
+    ctx.beginPath(); ctx.moveTo(0, sy); ctx.lineTo(w, sy); ctx.stroke();
+    ctx.setLineDash([]);
+
+    // channels
+    for (let i = 0; i < N; i++) {
+      const v = level[i];
+      const y = base - v * scale;
+      const locked = (state !== "scan") && i === lockCh;
+      ctx.fillStyle = locked ? "#8fd14f" : v >= SQUELCH ? "#38c8ff" : (i >= a && i < b ? "rgba(56,200,255,.75)" : "rgba(95,120,150,.7)");
+      ctx.fillRect(i * cw + cw * .15, y, Math.max(1, cw * .7), base - y);
+    }
+
+    const st = $("sState");
+    if (state === "scan") {
+      st.textContent = "● SCANNING"; st.className = "st";
+      $("sWin").textContent = "A" + win;
+      $("sRange").textContent = `${freq(a)}-${freq(b)} MHz`;
+      $("sInfo").textContent = "noise floor measured per window";
+    } else {
+      const s = signals.find(s => s.ch === lockCh);
+      st.textContent = state === "lock" ? "● LOCKED" : "● HANG";
+      st.className = "st lock";
+      if (state === "hang") st.style.color = "#e5bf4c"; else st.style.color = "";
+      $("sInfo").textContent = s ? `${freq(lockCh)} MHz · NFM · SNR ${s.snr.toFixed(1)} dB` : `${freq(lockCh)} MHz · waiting`;
+    }
+    if (state === "scan") st.style.color = "";
+  }
+
+  function frame(now) {
+    if (now - last > 60) { spawn(now); update(now); draw(); last = now; }
+    requestAnimationFrame(frame);
+  }
+
+  resize();
+  addEventListener("resize", () => { resize(); draw(); });
+  if (reduce) {
+    signals = [{ ch: 30, snr: 26, until: Infinity }, { ch: 120, snr: 12, until: Infinity }];
+    update(0); draw();
+  } else {
+    // seed a signal so a lock shows early
+    signals.push({ ch: 70, snr: 27, until: performance.now() + 5000 });
+    requestAnimationFrame(frame);
+  }
+})();
+</script>
+</body>
+</html>
