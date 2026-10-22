@@ -263,6 +263,7 @@ When the output is a terminal, rfscan runs with the TUI. The layout adapts to th
 | `n`, `<` / `>` | noise reduction on/off, strength |
 | `a` | activity screen (`l` name a channel, `Tab` in the popup: `digi`, `x` exclude, `c` clear) |
 | `e` | exclusions screen (`d` remove) |
+| `Tab` | select a detection history row (arrows move, `l` name the channel, `x` / `X` exclude it (with adjacent channels), `Tab` / `Esc` back) |
 
 ## Console mode and log file
 
@@ -288,7 +289,7 @@ rfscan --scan-range 144M-146M --web-gui 8080            # this computer only: ht
 rfscan --scan-range 144M-146M --web-gui 0.0.0.0:8080    # the home network
 ```
 
-rfscan prints the link at startup. The page shows the frequency or channel number with its name, the state, the signal level, and has buttons for pause, skip, exclude (with a note), undo, squelch, noise reduction and audio; the history, the activity log (naming channels, `digi` mode) and the exclusions are separate tabs. It has a dark and a light theme. It works with the TUI or with `--headless`, and several browsers can be connected at once, each with full control.
+rfscan prints the link at startup. The page shows the frequency or channel number with its name, the state, the signal level, and has buttons for pause, skip, exclude (with a note), undo, squelch, noise reduction and audio; the history and the activity log (tapping an entry names the channel, sets the `digi` mode or excludes it) and the exclusions are separate tabs. It has a dark and a light theme. It works with the TUI or with `--headless`, and several browsers can be connected at once, each with full control.
 
 The audio is sent to the browser as 8 kHz μ-law (64 kbit/s, 300-3000 Hz) after **Audio** is tapped (browsers need a tap before playing sound); the delay is about 0.2-0.3 s more than the local audio. The local audio keeps playing: **Mute PC** mutes it (like `m` in the TUI), and `--local-audio off` turns the local output off completely (the web page still gets the audio).
 

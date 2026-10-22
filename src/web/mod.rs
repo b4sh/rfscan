@@ -837,6 +837,8 @@ fn format_duration(d: Duration) -> String {
 fn history_item_json(ctx: &UiContext, h: &HistoryItem) -> Value {
     json!({
         "time": h.at.format("%H:%M:%S").to_string(),
+        "freq": h.freq,
+        "channel": h.channel,
         "label": ctx.freq_label(h.freq),
         "name": ctx.names.get(h.channel).cloned().flatten(),
         "mode": h.mode.name(),

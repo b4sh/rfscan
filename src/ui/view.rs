@@ -254,8 +254,8 @@ fn clear_popup(f: &mut Frame, area: Rect, error: Option<&str>) {
     f.render_widget(Paragraph::new(lines), inner);
 }
 
-/// The text popup, centered on the screen: a channel name (activity screen) or an optional
-/// exclusion note (`[x]`/`[X]`).
+/// The text popup, centered on the screen: a channel name (activity screen, detection
+/// history) or an optional exclusion note (`[x]`/`[X]`).
 fn label_popup(f: &mut Frame, area: Rect, app: &App, edit: &super::LabelEdit) {
     let (title, color, prompt, hint) = match edit.kind {
         super::EditKind::Label { .. } => (
@@ -391,7 +391,7 @@ fn key_lines(width: usize, items: &[&str], short: &[&str]) -> Vec<Line<'static>>
     lines.iter().map(|l| key_line(l)).collect()
 }
 
-const MAIN_KEYS: [&str; 12] = [
+const MAIN_KEYS: [&str; 13] = [
     "[q] quit",
     "[p] pause",
     "[space] skip",
@@ -404,8 +404,9 @@ const MAIN_KEYS: [&str; 12] = [
     "[</>] NR strength",
     "[a] activity",
     "[e] exclusions",
+    "[Tab] history",
 ];
-const MAIN_KEYS_SHORT: [&str; 11] = [
+const MAIN_KEYS_SHORT: [&str; 12] = [
     "[q] quit",
     "[p] pause",
     "[␣] skip",
@@ -417,12 +418,24 @@ const MAIN_KEYS_SHORT: [&str; 11] = [
     "[</>] NR%",
     "[a] act",
     "[e] excl",
+    "[Tab] hist",
+];
+/// Keys while a detection history row is selected.
+const HISTORY_KEYS: [&str; 4] = [
+    "[↑/↓] select",
+    "[l] add label",
+    "[x/X] exclude",
+    "[Tab/Esc] back",
 ];
 
 fn main_screen(f: &mut Frame, inner: Rect, app: &App) {
     let width = inner.width as usize;
     let wide = inner.width + 4 >= BIG_W;
-    let keys = key_lines(width, &MAIN_KEYS, &MAIN_KEYS_SHORT);
+    let keys = if app.history_sel.is_some() {
+        key_lines(width, &HISTORY_KEYS, &HISTORY_KEYS)
+    } else {
+        key_lines(width, &MAIN_KEYS, &MAIN_KEYS_SHORT)
+    };
     let progress = progress_lines(app, wide, width);
     let fixed = progress.len() + 1 + 2 + 1 + keys.len();
     let avail = inner.height as usize;
@@ -470,8 +483,9 @@ fn main_screen(f: &mut Frame, inner: Rect, app: &App) {
         history(f, hist, app);
         rule(f, inner, sep2, ("", ""), None);
     }
-    // The DSD-FME console over the history while the scanner is on a digi channel.
-    if let (Some(console), Some(lock)) = (&app.ctx.dsd_console, app.lock)
+    // The DSD-FME console over the history while the scanner is on a digi channel (not while a
+    // history row is selected).
+    if let (Some(console), Some(lock), None) = (&app.ctx.dsd_console, app.lock, app.history_sel)
         && lock.mode == Modulation::Digi
     {
         let area = Rect {
@@ -1075,7 +1089,11 @@ fn history(f: &mut Frame, area: Rect, app: &App) {
     let mut lines = vec![Line::from(dim(row(
         "time", "MHz", "mode", "name", "SNR", "RSSI", "dur.",
     )))];
-    for h in app.history.iter().take(rows) {
+    let sel = app
+        .history_sel
+        .map(|s| s.min(app.history.len().saturating_sub(1)));
+    let start = sel.map_or(0, |s| scroll_start(s, app.history.len(), rows));
+    for (i, h) in app.history.iter().enumerate().skip(start).take(rows) {
         let name = app
             .ctx
             .names
@@ -1083,15 +1101,18 @@ fn history(f: &mut Frame, area: Rect, app: &App) {
             .cloned()
             .flatten()
             .unwrap_or_default();
-        lines.push(Line::from(text(row(
-            &h.at.format("%H:%M:%S").to_string(),
-            &app.ctx.freq_label(h.freq),
-            h.mode.name(),
-            &name,
-            &format!("{:.1}", h.peak_snr_db),
-            &format!("{:.1}", h.peak_rssi_db),
-            &format!("{:.1}s", h.duration.as_secs_f64()),
-        ))));
+        lines.push(selected(
+            row(
+                &h.at.format("%H:%M:%S").to_string(),
+                &app.ctx.freq_label(h.freq),
+                h.mode.name(),
+                &name,
+                &format!("{:.1}", h.peak_snr_db),
+                &format!("{:.1}", h.peak_rssi_db),
+                &format!("{:.1}s", h.duration.as_secs_f64()),
+            ),
+            sel == Some(i),
+        ));
     }
     f.render_widget(Paragraph::new(lines), area);
 }

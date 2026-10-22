@@ -224,8 +224,9 @@ const LABEL_MAX: usize = 40;
 /// What the text popup is for.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum EditKind {
-    /// A channel name and the `digi` mode (activity screen, `[l] add label`, `[Tab]` switches
-    /// `digi`), saved to the channel file; `was`: the `digi` mode when the popup opened.
+    /// A channel name and the `digi` mode (`[l] add label` on the activity screen and in the
+    /// detection history, `[Tab]` switches `digi`), saved to the channel file; `was`: the `digi`
+    /// mode when the popup opened.
     Label { digi: bool, was: bool },
     /// An optional note for an exclusion (`[x]`/`[X]`); `wide` also excludes the adjacent
     /// channels of `channel`.
@@ -311,6 +312,8 @@ struct App {
     screen: Screen,
     activity_sel: usize,
     exclusions_sel: usize,
+    /// The selected detection history row (`[Tab]` on the main screen), `None` without one.
+    history_sel: Option<usize>,
     cpu: CpuMeter,
     edit: Option<LabelEdit>,
     /// Confirmation of clearing the activity log (`[c] clear`), with an error if saving failed.
@@ -335,6 +338,7 @@ pub fn run(
         screen: Screen::Main,
         activity_sel: 0,
         exclusions_sel: 0,
+        history_sel: None,
         cpu: CpuMeter::new(),
         edit: None,
         confirm_clear: None,
@@ -413,6 +417,10 @@ impl App {
             UiEvent::History(h) => {
                 self.history.push_front(h);
                 self.history.truncate(HISTORY_LEN);
+                // The selection stays on the same activity.
+                if let Some(sel) = &mut self.history_sel {
+                    *sel = (*sel + 1).min(self.history.len() - 1);
+                }
             }
             UiEvent::ExclusionsChanged => {}
         }
@@ -425,8 +433,21 @@ impl App {
                 KeyCode::Char('p') => Some(Command::TogglePause),
                 KeyCode::Char(' ') => Some(Command::Skip),
                 KeyCode::Char(c @ ('x' | 'X')) => {
-                    // The note popup; the exclusion is sent on Enter.
-                    if let Some(l) = self.lock {
+                    // The note popup; the exclusion is sent on Enter. With a history row
+                    // selected, `x`/`X` exclude that row's channel.
+                    if let Some(sel) = self.history_sel {
+                        if let Some(h) = self.history.get(sel) {
+                            self.edit = Some(LabelEdit {
+                                kind: EditKind::Exclude {
+                                    channel: Some(h.channel),
+                                    wide: c == 'X',
+                                },
+                                freq: h.freq,
+                                text: String::new(),
+                                error: None,
+                            });
+                        }
+                    } else if let Some(l) = self.lock {
                         self.edit = Some(LabelEdit {
                             kind: EditKind::Exclude {
                                 channel: Some(l.channel),
@@ -466,7 +487,30 @@ impl App {
                     self.screen = Screen::Exclusions;
                     None
                 }
-                _ => None,
+                // The history selection: `[l]` names the selected channel.
+                KeyCode::Tab => {
+                    self.history_sel = match self.history_sel {
+                        None if !self.history.is_empty() => Some(0),
+                        _ => None,
+                    };
+                    None
+                }
+                KeyCode::Esc => {
+                    self.history_sel = None;
+                    None
+                }
+                KeyCode::Char('l') => {
+                    if let Some(h) = self.history_sel.and_then(|s| self.history.get(s)) {
+                        self.open_label(h.freq);
+                    }
+                    None
+                }
+                _ => {
+                    if let Some(sel) = &mut self.history_sel {
+                        scroll(sel, self.history.len(), code);
+                    }
+                    None
+                }
             },
             Screen::Activity => {
                 let rows = self.activity_rows();
@@ -488,13 +532,7 @@ impl App {
                     KeyCode::Char('c') => self.confirm_clear = Some(None),
                     KeyCode::Char('l') => {
                         if let Some(r) = rows.get(self.activity_sel) {
-                            let digi = self.ctx.digi_near(r.freq);
-                            self.edit = Some(LabelEdit {
-                                kind: EditKind::Label { digi, was: digi },
-                                freq: r.freq,
-                                text: self.ctx.name_near(r.freq).unwrap_or("").to_string(),
-                                error: None,
-                            });
+                            self.open_label(r.freq);
                         }
                     }
                     _ => scroll(&mut self.activity_sel, rows.len(), code),
@@ -517,6 +555,17 @@ impl App {
                 None
             }
         }
+    }
+
+    /// Opens the label popup for `freq`, prefilled with the current name and `digi` mode.
+    fn open_label(&mut self, freq: u64) {
+        let digi = self.ctx.digi_near(freq);
+        self.edit = Some(LabelEdit {
+            kind: EditKind::Label { digi, was: digi },
+            freq,
+            text: self.ctx.name_near(freq).unwrap_or("").to_string(),
+            error: None,
+        });
     }
 
     /// A key in the clear confirmation: `y` clears the activity log and saves the empty file,
@@ -696,6 +745,7 @@ mod tests {
             screen: Screen::Main,
             activity_sel: 0,
             exclusions_sel: 0,
+            history_sel: None,
             cpu: CpuMeter {
                 last: None,
                 percent: Some(9.0),
@@ -962,5 +1012,55 @@ mod tests {
         println!("{screen}\n");
         assert!(screen.contains("mode") && screen.contains("145.500  NFM"));
         assert!(screen.contains("438.800  DIGI"));
+    }
+
+    /// `[Tab]` selects a history row, the selection follows its activity when new ones arrive,
+    /// `[l]` opens the label popup and `[x]`/`[X]` the exclusion popup for it.
+    #[test]
+    fn history_label() {
+        let mut a = app();
+        a.key(KeyCode::Down);
+        assert_eq!(a.history_sel, None);
+        a.key(KeyCode::Tab);
+        assert_eq!(a.history_sel, Some(0));
+        a.key(KeyCode::Down);
+        a.key(KeyCode::Down);
+        assert_eq!(a.history_sel, Some(1));
+        let screen = render(&a, 100, 30);
+        println!(
+            "{screen}
+"
+        );
+        assert!(screen.contains("[l] add label"));
+        a.apply(UiEvent::History(crate::events::HistoryItem {
+            at: chrono::Local::now(),
+            channel: 1,
+            freq: 433_375_000,
+            mode: Modulation::Nfm,
+            peak_snr_db: 20.0,
+            peak_rssi_db: -60.0,
+            duration: Duration::from_millis(900),
+        }));
+        assert_eq!(a.history_sel, Some(2));
+        a.key(KeyCode::Char('l'));
+        let edit = a.edit.as_ref().unwrap();
+        assert_eq!(edit.freq, 145_500_000);
+        assert_eq!(edit.text, "AMATEUR CALLING FREQ");
+        a.edit = None;
+        a.key(KeyCode::Char('X'));
+        let edit = a.edit.as_ref().unwrap();
+        assert_eq!(edit.freq, 145_500_000);
+        assert!(matches!(
+            edit.kind,
+            EditKind::Exclude {
+                channel: Some(0),
+                wide: true
+            }
+        ));
+        a.edit = None;
+        a.key(KeyCode::Tab);
+        assert_eq!(a.history_sel, None);
+        a.key(KeyCode::Char('l'));
+        assert!(a.edit.is_none());
     }
 }

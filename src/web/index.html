@@ -159,6 +159,7 @@ body:not([data-tab="main"]) #main { display: none; }
   font-size: 15px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 6px;
   cursor: pointer; user-select: none;
 }
+.btn[hidden] { display: none; }
 .btn:active { transform: scale(.97); }
 .btn:disabled { opacity: .35; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
@@ -192,7 +193,7 @@ body[data-list="excl"] #pane-excl { display: block; }
 .lrow.head { display: none; }
 .lrow .f { font-size: 15px; font-weight: 700; }
 .lrow .n { color: var(--name); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
-.lrow .c { color: var(--dim); }
+.lrow .c { color: var(--dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .lrow .c[data-l]::before { content: attr(data-l) " "; color: var(--faint); }
 .lrow .note { color: var(--hang); }
 .lrow .br { flex-basis: 100%; height: 0; }
@@ -231,14 +232,18 @@ nav.tabs button.active { color: var(--accent); }
   #lists { position: sticky; top: 56px; max-height: calc(100vh - 70px); overflow: auto; }
   nav.tabs { display: none; }
   .listtabs { display: flex; }
+}
+/* lists in columns when their pane is wide enough (phone layout otherwise, no horizontal scroll) */
+#lists { container: lists / inline-size; }
+@container lists (min-width: 560px) {
   .lrow { display: grid; gap: 10px; padding: 5px 2px; align-items: center; }
   .lrow .br { display: none; }
   .lrow .c[data-l]::before { content: none; }
   .lrow .n { flex: none; }
   .lrow .mode { justify-self: start; }
   .lrow.head { display: grid; font-size: 11px; font-weight: 700; color: var(--faint); text-transform: uppercase; letter-spacing: .5px; cursor: default; }
-  #pane-history .lrow  { grid-template-columns: 96px 44px minmax(120px, 1fr) 70px 50px 64px 84px; }
-  #pane-activity .lrow { grid-template-columns: 96px 44px minmax(120px, 1fr) 56px 60px 40px 50px; }
+  #pane-history .lrow  { grid-template-columns: 96px 44px minmax(60px, 1fr) 70px 50px 64px 84px; }
+  #pane-activity .lrow { grid-template-columns: 96px 44px minmax(60px, 1fr) 56px 60px 40px 124px; }
   #pane-excl .lrow     { grid-template-columns: 96px minmax(120px, 1fr) minmax(160px, 2fr) 60px; }
 }
 .conn.off { background: var(--danger); }
@@ -369,7 +374,7 @@ body.nolocal #bAudio { grid-column: 1 / -1; }
   </div>
 </div>
 
-<!-- activity item sheet -->
+<!-- activity and history item sheet -->
 <div class="backdrop" id="itemSheet">
   <div class="sheet">
     <h3 id="itFreq"></h3>
@@ -658,7 +663,7 @@ function renderStats() {
 function renderHistory() {
   $("historyList").innerHTML = S.history.length === 0 ? `<div class="empty">no detections yet</div>` :
     `<div class="lrow head"><span>Freq</span><span>Mode</span><span>Name</span><span>Time</span><span>Dur</span><span>Max SNR</span><span>Max RSSI</span></div>` +
-    S.history.map(h => `<div class="lrow">
+    S.history.map((h, i) => `<div class="lrow" data-h="${i}">
       <span class="f">${esc(h.label)}</span>${modeTag(h.mode)}<span class="n">${esc(h.name)}</span><span class="br"></span>
       <span class="c">${esc(h.time)}</span><span class="c">${esc(h.dur)}</span>
       <span class="c" data-l="SNR">${fix1(h.snr)} dB</span><span class="c">${fix1(h.rssi)} dBFS</span></div>`).join("");
@@ -724,16 +729,25 @@ function doExclude(wide) {
 $("exOne").onclick = () => doExclude(false);
 $("exWide").onclick = () => doExclude(true);
 
+// The item sheet names or excludes a channel (activity and history).
 let itTarget = null;
+function openItem(t, info) {
+  itTarget = t;
+  $("itFreq").textContent = t.label + " MHz";
+  $("itInfo").textContent = info;
+  $("itName").value = t.name || "";
+  $("itDigi").checked = t.mode === "DIGI";
+  openSheet("itemSheet");
+}
 $("activityList").onclick = e => {
   const it = e.target.closest("[data-a]"); if (!it) return;
   const a = S.activity[+it.dataset.a]; if (!a) return;
-  itTarget = a;
-  $("itFreq").textContent = a.label + " MHz";
-  $("itInfo").textContent = `total ${a.total} · ${a.hits} hits · last ${a.last}`;
-  $("itName").value = a.name || "";
-  $("itDigi").checked = a.mode === "DIGI";
-  openSheet("itemSheet");
+  openItem(a, `total ${a.total} · ${a.hits} hits · last ${a.last}`);
+};
+$("historyList").onclick = e => {
+  const it = e.target.closest("[data-h]"); if (!it) return;
+  const h = S.history[+it.dataset.h]; if (!h) return;
+  openItem(h, `${h.time} · ${h.dur} · max SNR ${fix1(h.snr)} dB`);
 };
 $("itSave").onclick = () => {
   if (!itTarget) return;
@@ -743,7 +757,9 @@ $("itSave").onclick = () => {
 $("itExclude").onclick = () => {
   if (!itTarget) return;
   closeSheet("itemSheet");
-  openExclude(itTarget.freq, null, itTarget.label, itTarget.name, false);
+  // A history entry knows its plan channel, so its adjacent channels can be excluded too.
+  const ch = itTarget.channel ?? null;
+  openExclude(itTarget.freq, ch, itTarget.label, itTarget.name, ch !== null);
 };
 $("exclList").onclick = e => {
   const b = e.target.closest("[data-del]"); if (!b) return;
