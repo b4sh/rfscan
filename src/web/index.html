@@ -523,7 +523,7 @@ function renderHello() {
   const h = S.hello;
   $("device").textContent = `${h.device} · ${h.rate}`;
   document.body.classList.toggle("nolocal", !h.local_audio);
-  $("exWide").textContent = `Exclude ±${h.exclude_wide} channels`;
+  $("exWide").textContent = `Exclude ±${h.exclude_wide} channel${h.exclude_wide === 1 ? "" : "s"}`;
   $("about").innerHTML = `rfscan ${esc(h.version)} · AGPL-3.0` +
     (h.source ? ` · <a href="${esc(h.source)}" target="_blank" rel="noopener">source code</a>` : "");
 }

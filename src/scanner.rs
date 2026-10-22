@@ -606,7 +606,9 @@ pub fn run(
                         Err(e) => logwarn!(log, "WARNING: {e}"),
                     }
                     send(UiEvent::ExclusionsChanged);
-                    leave = current.is_some_and(|l| l.freq == freq);
+                    // The current channel is now masked: also when it is one of the adjacent
+                    // channels (half a step tolerance, as for the exclusion file).
+                    leave = current.is_some_and(|l| exclusions.mask.get(l.channel) == Some(&true));
                 }
                 Command::UndoExclusion => {
                     if let Some(last) = exclusions.added.pop() {
