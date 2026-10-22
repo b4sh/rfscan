@@ -1,5 +1,7 @@
 <p align="center"><img src="docs/rfscan-logo.png" alt="rfscan" width="256"></p>
 
+<p align="center"><a href="https://b4sh.github.io/rfscan/">Project page</a> · <a href="../../releases/latest">Download</a> · <a href="DOC.md">Documentation</a></p>
+
 # rfscan
 
 A fast radio scanner for SDR receivers, running in the terminal. rfscan sweeps frequency ranges or a list of channels, stops on a signal, demodulates it (AM or narrowband FM) and plays it, then goes on scanning when the transmission ends. Digital voice (DMR, P25, D-STAR, YSF, NXDN and others) is played through [DSD-FME](https://github.com/lwvmobile/dsd-fme). A built-in web page lets you watch, hear and control the scanner from a phone.
