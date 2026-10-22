@@ -32,7 +32,7 @@ Tested on Windows 11 and on a Raspberry Pi 4 (4 GB, Debian 13 64-bit). On the Ra
 
 1. **Get rfscan.**
    - **Windows:** download the zip from [Releases](../../releases) and unpack it. It contains `rfscan.exe` with SoapySDR and the receiver drivers, so nothing else (PothosSDR) is needed.
-   - **Or build it from source** (Windows, Linux): install SoapySDR with the module of your receiver (on Windows [PothosSDR](https://downloads.myriadrf.org/builds/PothosSDR/) added to `PATH`, on Linux the system packages) and [Rust](https://rustup.rs/), then `cargo build --release`; the program is `target/release/rfscan`. Details, and two PothosSDR libraries that should be replaced (RTL-SDR, SDRplay), are in [DOC.md](DOC.md#installation).
+   - **Or build it from source** (Windows, Linux): install SoapySDR with the module of your receiver (on Windows [PothosSDR](https://downloads.myriadrf.org/builds/PothosSDR/) added to `PATH`, on Linux the system packages) and [Rust](https://rustup.rs/), then `cargo build --release`; the program is `target/release/rfscan` (on Linux `packaging/linux/install.sh` builds it and installs it to `/usr/local/bin`). Details, and two PothosSDR libraries that should be replaced (RTL-SDR, SDRplay), are in [DOC.md](DOC.md#installation).
 2. **Install the USB driver** of your receiver: on Windows the WinUSB driver through [Zadig](https://zadig.akeo.ie/), e.g. for an RTL-SDR. An Airspy needs no driver installation (Windows sets it up by itself), an SDRplay needs the SDRplay API service instead.
 3. **Check that the receiver is seen**, with its gain stages and settings:
    ```

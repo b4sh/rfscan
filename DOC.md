@@ -30,17 +30,17 @@ rfscan needs SoapySDR with the module (driver) of your receiver.
 - **RTL-SDR with PothosSDR:** the last PothosSDR (2021) has an old `rtlsdr.dll`, with which rfscan crashes when it closes an RTL-SDR (exit code 139; the scan itself works and everything is saved before). Replace `C:\Program Files\PothosSDR\bin\rtlsdr.dll` with the x64 `rtlsdr.dll` from a current [rtl-sdr-blog](https://github.com/rtlsdrblog/rtl-sdr-blog/releases) release (keep a copy of the old one), or put it next to `rfscan.exe`, which affects rfscan only.
 - **SDRplay with PothosSDR:** PothosSDR has the SDRplay API library 3.07 (`sdrplay_api.dll` from 2020), which does not work with a current SDRplay API service (no device found, the RSP is reset). Put the `sdrplay_api.dll` (x64) of your installed SDRplay API next to `rfscan.exe`; the module then warns that the version differs from its build version, but works (checked with API 3.15).
 
-**Linux, including the Raspberry Pi.** Tested on a Raspberry Pi 4 (4 GB) with Debian 13 (64-bit). Install SoapySDR with its development files, the modules of your receivers and the build tools from the system packages, then [Rust](https://rustup.rs/), and build rfscan:
+**Linux, including the Raspberry Pi.** Tested on a Raspberry Pi 4 (4 GB) with Debian 13 (64-bit). Install SoapySDR with its development files, the modules of your receivers and the build tools from the system packages, then [Rust](https://rustup.rs/), and build and install rfscan (as a normal user, not with `sudo`):
 
 ```
 sudo apt install build-essential pkg-config clang libclang-dev git libsoapysdr-dev soapysdr-module-rtlsdr soapysdr-module-airspy libasound2-dev
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 git clone https://github.com/b4sh/rfscan
 cd rfscan
-cargo build --release
+packaging/linux/install.sh
 ```
 
-The build takes about 7 minutes on a Raspberry Pi 4; the program is `target/release/rfscan`. The Airspy and RTL-SDR packages set up the USB access by themselves (udev rules), so the receivers work without root. An RTL-SDR is also taken by the kernel's DVB-T driver; librtlsdr detaches it when rfscan opens the receiver and attaches it again on exit, but after a few runs the stream may stop (`the stream delivers no samples`). Block the DVB-T driver once (the Debian packages do not do it): unplug the receiver, run
+The script checks the build dependencies (when one is missing it prints the `apt` command and stops; it installs no system packages itself), builds rfscan with `cargo build --release` and asks for `sudo` only to copy the program to `/usr/local/bin/rfscan` and the documentation to `/usr/local/share/doc/rfscan`. Another location: `PREFIX=/opt/rfscan packaging/linux/install.sh`. `--no-build` installs an already built `target/release/rfscan`, `--uninstall` removes the installed files (your files in `~/.config/rfscan` stay). To update: `git pull` and run the script again. Without installing, the program is `target/release/rfscan` after `cargo build --release`. The build takes about 7 minutes on a Raspberry Pi 4. The Airspy and RTL-SDR packages set up the USB access by themselves (udev rules), so the receivers work without root. An RTL-SDR is also taken by the kernel's DVB-T driver; librtlsdr detaches it when rfscan opens the receiver and attaches it again on exit, but after a few runs the stream may stop (`the stream delivers no samples`). Block the DVB-T driver once (the Debian packages do not do it): unplug the receiver, run
 
 ```
 printf 'blacklist dvb_usb_rtl28xxu\nblacklist rtl2832_sdr\nblacklist rtl2832\n' | sudo tee /etc/modprobe.d/blacklist-rtlsdr.conf
