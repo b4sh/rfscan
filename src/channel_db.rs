@@ -115,7 +115,7 @@ fn parse_line(line: &str, number: usize) -> Result<Option<ChannelEntry>, String>
             if entry.bw.is_some() {
                 return Err("bw= given twice".into());
             }
-            entry.bw = Some(crate::cli::parse_hz(v)?);
+            entry.bw = Some(crate::cli::parse_bw(v)?);
         } else if let Some(m) = Modulation::parse(w) {
             if entry.mode.is_some() {
                 return Err("mode given twice".into());

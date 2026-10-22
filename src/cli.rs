@@ -73,14 +73,15 @@ pub struct Cli {
     #[arg(long, value_parser = parse_mode, value_name = "am|fm|digi", help_heading = H_RADIO)]
     pub mode: Option<Modulation>,
 
-    /// Channel grid step for ranges without their own step (suffixes k, M). Default: AM 8.33 kHz
-    /// (25/3 kHz airband grid), NFM 12.5 kHz
-    #[arg(long, value_name = "HZ", hide_short_help = true, value_parser = parse_hz, help_heading = H_RADIO)]
+    /// Channel grid step for ranges without their own step (suffixes k, M): 2.5k, 5k, 6.25k,
+    /// 7.5k, 8.33k, 9k, 10k, 12.5k, 15k, 20k, 25k, 30k or 50k. Default: AM 8.33 kHz (25/3 kHz
+    /// airband grid), NFM 12.5 kHz
+    #[arg(long, value_name = "HZ", hide_short_help = true, value_parser = parse_step, help_heading = H_RADIO)]
     pub step: Option<u64>,
 
-    /// Default channel bandwidth (Hz, suffixes k, M). Default: AM 8.33 kHz, NFM in ranges equal
-    /// to the step, NFM in a channel list 12.5 kHz
-    #[arg(long, value_name = "HZ", hide_short_help = true, value_parser = parse_hz, help_heading = H_RADIO)]
+    /// Default channel bandwidth (Hz, suffixes k, M; 2.5k-50k). Default: AM 8.33 kHz, NFM in
+    /// ranges equal to the step, NFM in a channel list 12.5 kHz
+    #[arg(long, value_name = "HZ", hide_short_help = true, value_parser = parse_bw, help_heading = H_RADIO)]
     pub bw: Option<u64>,
 
     /// Detection threshold: channel SNR in dB above the noise floor
@@ -368,6 +369,57 @@ pub fn parse_hz(s: &str) -> Result<u64, String> {
     Ok(hz as u64)
 }
 
+/// Standard channel steps in Hz (8.33 kHz is the 25/3 kHz airband grid, see `plan::Step`).
+const STANDARD_STEPS: [u64; 13] = [
+    2_500, 5_000, 6_250, 7_500, 8_333, 9_000, 10_000, 12_500, 15_000, 20_000, 25_000, 30_000,
+    50_000,
+];
+const STANDARD_STEPS_TEXT: &str =
+    "2.5k, 5k, 6.25k, 7.5k, 8.33k, 9k, 10k, 12.5k, 15k, 20k, 25k, 30k, 50k";
+/// Channel bandwidth range in Hz.
+const BW_RANGE: std::ops::RangeInclusive<u64> = 2_500..=50_000;
+
+fn is_standard_step(hz: u64) -> bool {
+    crate::plan::Step::from_hz(hz).den == 3 || STANDARD_STEPS.contains(&hz)
+}
+
+/// `; did you mean 8.33k?` when the value without a suffix would be valid in kHz.
+fn suffix_hint(s: &str, valid: impl Fn(u64) -> bool) -> String {
+    let s = s.trim();
+    match s.chars().last() {
+        Some(c) if c.is_ascii_digit() && parse_hz(&format!("{s}k")).is_ok_and(valid) => {
+            format!("; did you mean {s}k?")
+        }
+        _ => String::new(),
+    }
+}
+
+/// Parses a channel grid step: one of the standard steps (`STANDARD_STEPS`).
+pub fn parse_step(s: &str) -> Result<u64, String> {
+    let hz = parse_hz(s)?;
+    if is_standard_step(hz) {
+        return Ok(hz);
+    }
+    Err(format!(
+        "step '{}' ({hz} Hz) is not a standard channel step ({STANDARD_STEPS_TEXT}){}",
+        s.trim(),
+        suffix_hint(s, is_standard_step)
+    ))
+}
+
+/// Parses a channel bandwidth (`bw`): 2.5 kHz to 50 kHz.
+pub fn parse_bw(s: &str) -> Result<u64, String> {
+    let hz = parse_hz(s)?;
+    if BW_RANGE.contains(&hz) {
+        return Ok(hz);
+    }
+    Err(format!(
+        "bandwidth '{}' ({hz} Hz) is outside 2.5k-50k{}",
+        s.trim(),
+        suffix_hint(s, |hz| BW_RANGE.contains(&hz))
+    ))
+}
+
 /// Parses "key=value, key=value" (Soapy kwargs syntax). Values are not interpreted.
 pub fn parse_kwargs(s: &str) -> Result<Kwargs, String> {
     let mut out = Vec::new();
@@ -437,7 +489,7 @@ fn parse_suffixes(fields: &[&str], allow_step: bool) -> Result<Suffixes, String>
     for &f in fields {
         let f = f.trim();
         if let Some(v) = f.strip_prefix("bw=") {
-            if bw.replace(parse_hz(v)?).is_some() {
+            if bw.replace(parse_bw(v)?).is_some() {
                 return Err("bw= given twice".into());
             }
         } else if let Some(m) = Modulation::parse(f) {
@@ -445,7 +497,7 @@ fn parse_suffixes(fields: &[&str], allow_step: bool) -> Result<Suffixes, String>
                 return Err("modulation given twice".into());
             }
         } else if allow_step {
-            if step.replace(parse_hz(f)?).is_some() {
+            if step.replace(parse_step(f)?).is_some() {
                 return Err("step given twice".into());
             }
         } else {
@@ -639,8 +691,8 @@ fn parse_duration(s: &str) -> Result<f64, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ChannelArg, Cli, Modulation, RangeArg, parse_channel_list, parse_hz, parse_kwargs,
-        parse_range, parse_range_arg, parse_voice_addr,
+        ChannelArg, Cli, Modulation, RangeArg, parse_bw, parse_channel_list, parse_hz,
+        parse_kwargs, parse_range, parse_range_arg, parse_step, parse_voice_addr,
     };
     use clap::Parser;
 
@@ -794,5 +846,25 @@ mod tests {
         assert!(parse_hz("0").is_err());
         assert!(parse_hz("-5M").is_err());
         assert!(parse_hz("abc").is_err());
+    }
+
+    #[test]
+    fn steps_and_bandwidths() {
+        assert_eq!(parse_step("8.33k"), Ok(8_330));
+        assert_eq!(parse_step("12.5k"), Ok(12_500));
+        assert_eq!(parse_step("12500"), Ok(12_500));
+        assert_eq!(parse_step("50k"), Ok(50_000));
+        let e = parse_step("8.33").unwrap_err();
+        assert!(e.contains("not a standard channel step") && e.ends_with("did you mean 8.33k?"));
+        assert!(!parse_step("11k").unwrap_err().contains("did you mean"));
+        assert!(parse_step("100k").is_err());
+        assert_eq!(parse_bw("10k"), Ok(10_000));
+        assert_eq!(parse_bw("11k"), Ok(11_000));
+        assert!(parse_bw("10").unwrap_err().ends_with("did you mean 10k?"));
+        assert!(parse_bw("60k").is_err());
+        let e = parse_range_arg("118M-136M:am:8.33").unwrap_err();
+        assert!(e.contains("did you mean 8.33k?"), "{e}");
+        assert!(parse_range_arg("118M-136M:am:bw=8").is_err());
+        assert!(parse_channel_list("145.5M:bw=12").is_err());
     }
 }
