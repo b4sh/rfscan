@@ -1,6 +1,6 @@
 [package]
 name = "rfscan"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "Fast terminal radio scanner for SoapySDR receivers"
 license = "AGPL-3.0-or-later"
