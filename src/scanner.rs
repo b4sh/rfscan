@@ -37,7 +37,7 @@ use crate::activity::{ActivityLog, format_mhz};
 use crate::bench::{StreamCounters, consume};
 use crate::demod::{Ctrl, Report};
 use crate::detector::Detector;
-use crate::device::{IqBuffer, ReadOutcome, SdrSource};
+use crate::device::{IqBuffer, ReadOutcome, SdrError, SdrSource};
 use crate::digi_tcp::{DigiEvent, DigiServer};
 use crate::events::{
     Command, HistoryItem, LockView, SPECTRUM_BINS, ScanState, Spectrum, Status, UiEvent,
@@ -153,10 +153,12 @@ pub fn read_iq(
             ReadOutcome::Timeout | ReadOutcome::Samples(0) => {
                 counters.timeouts += 1;
                 consecutive_timeouts += 1;
-                anyhow::ensure!(
-                    consecutive_timeouts < 20,
-                    "the stream delivers no samples ({consecutive_timeouts} timeouts in a row)"
-                );
+                if consecutive_timeouts >= 20 {
+                    return Err(SdrError::NoSamples {
+                        timeouts: consecutive_timeouts,
+                    }
+                    .into());
+                }
             }
         }
     }

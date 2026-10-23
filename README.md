@@ -6,6 +6,9 @@
 
 A fast radio scanner for SDR receivers, running in the terminal. rfscan sweeps frequency ranges or a list of channels, stops on a signal, demodulates it (AM or narrowband FM) and plays it, then goes on scanning when the transmission ends. Digital voice (DMR, P25, D-STAR, YSF, NXDN and others) is played through [DSD-FME](https://github.com/lwvmobile/dsd-fme). A built-in web page lets you watch, hear and control the scanner from a phone.
 
+> [!IMPORTANT]
+> **Set the settle time for your receiver before the first scan.** After every retune a receiver keeps delivering samples of the previous frequency for a while, from a few to over a hundred milliseconds. If `--settle` is shorter than that, rfscan sees signals in the wrong places and scanning does not work properly. The default of 20 ms fits an Airspy, not an RTL-SDR: an RTL-SDR needs about 63 ms with smaller stream buffers (`--stream-args "bufflen=16384,buffers=64"`) and over 110 ms without them. `rfscan --calibrate` measures the right value for your receiver. An RTL-SDR also needs `--sample-rate 2.4M`: higher rates are unstable and can make the dongle stop responding. See [Receiver setup](https://github.com/b4sh/rfscan/blob/main/DOC.md#receiver-setup).
+
 It works with any receiver supported by [SoapySDR](https://github.com/pothosware/SoapySDR) and is written in Rust.
 
 ## How it works

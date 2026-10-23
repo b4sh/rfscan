@@ -101,6 +101,13 @@ pub enum SdrError {
     /// The requested parameter is outside the capabilities reported by the device.
     #[error("{0}")]
     Unsupported(String),
+    /// A retune refused by the driver, usually because the receiver stopped responding.
+    #[error("setFrequency {} MHz failed: {message}", crate::activity::format_mhz(hz.round() as u64))]
+    Tune { hz: f64, message: String },
+    /// The stream gave no samples for this many reads in a row: the receiver stopped
+    /// delivering them (unplugged or not responding).
+    #[error("the stream delivers no samples ({timeouts} timeouts in a row)")]
+    NoSamples { timeouts: u32 },
 }
 
 /// IQ sample source. Values returned by `set_*` are the values actually accepted by the hardware.

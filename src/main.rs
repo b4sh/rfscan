@@ -1390,8 +1390,39 @@ fn use_packaged_soapy() {
     }
 }
 
-fn main() -> anyhow::Result<()> {
+/// Printed after an error from a failed retune: it usually means the receiver stopped
+/// responding, most often because of a too short settle or a too high sample rate.
+const TUNE_HINT: &str = "The receiver stopped responding. Check --settle and --sample-rate for your receiver; see DOC.md, Receiver setup.";
+
+/// Printed after the stream stopped delivering samples: an unplugged or hung receiver.
+const NO_SAMPLES_HINT: &str = "The receiver stopped delivering samples. Check the USB connection, --settle and --sample-rate for your receiver; see DOC.md, Receiver setup.";
+
+fn main() -> std::process::ExitCode {
     use_packaged_soapy();
+    match run() {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(e) => {
+            // The same output as returning the error from `main`, followed by the hint.
+            eprintln!("Error: {e:?}");
+            if let Some(hint) = receiver_hint(&e) {
+                eprintln!("{hint}");
+            }
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+/// A hint for an error (or one of its causes) that points to the receiver settings.
+fn receiver_hint(e: &anyhow::Error) -> Option<&'static str> {
+    e.chain()
+        .find_map(|c| match c.downcast_ref::<device::SdrError>()? {
+            device::SdrError::Tune { .. } => Some(TUNE_HINT),
+            device::SdrError::NoSamples { .. } => Some(NO_SAMPLES_HINT),
+            _ => None,
+        })
+}
+
+fn run() -> anyhow::Result<()> {
     let argv: Vec<std::ffi::OsString> = std::env::args_os().collect();
     // -h and --help before parsing, so they work also with other options or a broken file.
     if let Some(long) = help::requested(&argv) {
@@ -1604,6 +1635,25 @@ mod tests {
             freq_text: String::new(),
             line: 1,
         }
+    }
+
+    /// A failed retune names the frequency; receiver errors get a hint, also below a context.
+    #[test]
+    fn tune_error() {
+        let e = device::SdrError::Tune {
+            hz: 433_200_000.0,
+            message: "Other: setFrequency failed".into(),
+        };
+        assert_eq!(
+            e.to_string(),
+            "setFrequency 433.200 MHz failed: Other: setFrequency failed"
+        );
+        let e = anyhow::Error::from(e).context("scanning");
+        assert_eq!(receiver_hint(&e), Some(TUNE_HINT));
+        let e = anyhow::Error::from(device::SdrError::NoSamples { timeouts: 20 });
+        assert_eq!(receiver_hint(&e), Some(NO_SAMPLES_HINT));
+        let e = anyhow::Error::from(device::SdrError::Unsupported("x".into()));
+        assert_eq!(receiver_hint(&e), None);
     }
 
     /// Channel file in a range: name and mode from the file, bw= from the file only for the

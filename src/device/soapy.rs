@@ -20,6 +20,13 @@ fn driver_err(op: &str, e: soapysdr::Error) -> SdrError {
     }
 }
 
+fn tune_err(hz: f64, e: soapysdr::Error) -> SdrError {
+    SdrError::Tune {
+        hz,
+        message: e.to_string(),
+    }
+}
+
 /// Minimal, safe wrappers of SoapySDR C API functions missing from the `soapysdr` crate.
 mod raw {
     use std::ffi::{CStr, CString, c_char, c_int, c_void};
@@ -685,7 +692,7 @@ impl SdrSource for SoapySource {
         }
         self.dev
             .set_frequency(RX, self.channel, hz, ())
-            .map_err(|e| driver_err("setFrequency", e))?;
+            .map_err(|e| tune_err(hz, e))?;
         self.dev
             .frequency(RX, self.channel)
             .map_err(|e| driver_err("getFrequency", e))
@@ -694,7 +701,7 @@ impl SdrSource for SoapySource {
     fn tune(&mut self, hz: f64) -> Result<(), SdrError> {
         self.dev
             .set_frequency(RX, self.channel, hz, ())
-            .map_err(|e| driver_err("setFrequency", e))
+            .map_err(|e| tune_err(hz, e))
     }
 
     fn configure(&mut self, config: &[(String, String)]) -> Result<(), SdrError> {

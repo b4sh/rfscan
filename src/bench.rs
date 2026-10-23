@@ -92,9 +92,9 @@ pub fn consume(
                 counters.timeouts += 1;
                 consecutive_timeouts += 1;
                 if consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS {
-                    return Err(SdrError::Unsupported(format!(
-                        "the stream delivers no samples ({consecutive_timeouts} timeouts in a row)"
-                    )));
+                    return Err(SdrError::NoSamples {
+                        timeouts: consecutive_timeouts,
+                    });
                 }
             }
         }
