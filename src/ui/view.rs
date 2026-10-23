@@ -205,8 +205,8 @@ pub fn draw(f: &mut Frame, app: &App) {
     if let Some(edit) = &app.edit {
         label_popup(f, area, app, edit);
     }
-    if let Some(error) = &app.confirm_clear {
-        clear_popup(f, area, error.as_deref());
+    if let Some((action, error)) = &app.confirm {
+        confirm_popup(f, area, app, *action, error.as_deref());
     }
 }
 
@@ -222,13 +222,37 @@ fn centered(area: Rect, w: u16, h: u16) -> Rect {
     }
 }
 
-/// Confirmation of clearing the activity log (activity screen, `[c] clear`).
-fn clear_popup(f: &mut Frame, area: Rect, error: Option<&str>) {
+/// Confirmation on the activity screen: clearing the log (`[c] clear`) or deleting one entry
+/// (`[d] delete`).
+fn confirm_popup(
+    f: &mut Frame,
+    area: Rect,
+    app: &App,
+    action: super::ConfirmAction,
+    error: Option<&str>,
+) {
+    let (title, what) = match action {
+        super::ConfirmAction::Clear => (
+            " clear the activity log ".to_string(),
+            "All entries will be removed and the empty file saved.".to_string(),
+        ),
+        super::ConfirmAction::Delete(freq) => {
+            let name = app
+                .ctx
+                .name_near(freq)
+                .map(|n| format!(" {n}"))
+                .unwrap_or_default();
+            (
+                format!(" delete {} MHz{name} ", app.ctx.freq_label(freq)),
+                "Its time and hits will be removed and the file saved.".to_string(),
+            )
+        }
+    };
     let rect = centered(area, 60, 7);
     let block = Block::bordered()
         .border_style(Style::new().fg(Color::LightRed))
         .title(Line::from(Span::styled(
-            " clear the activity log ",
+            fit(&title, 56),
             Style::new()
                 .fg(Color::LightRed)
                 .add_modifier(Modifier::BOLD),
@@ -239,9 +263,7 @@ fn clear_popup(f: &mut Frame, area: Rect, error: Option<&str>) {
     f.render_widget(block, rect);
     let lines = vec![
         Line::from(""),
-        Line::from(text(
-            "All entries will be removed and the empty file saved.",
-        )),
+        Line::from(text(&what)),
         match error {
             Some(e) => Line::from(Span::styled(
                 fit(e, inner.width as usize),
@@ -1137,13 +1159,27 @@ fn selected(line: String, is_sel: bool) -> Line<'static> {
     }
 }
 
+/// Keys of the activity screen.
+const ACTIVITY_KEYS: [&str; 9] = [
+    "[↑↓] scroll",
+    "[←→] sort",
+    "[s] reverse",
+    "[l] add label",
+    "[x] exclude",
+    "[d] delete",
+    "[c] clear",
+    "[a/Esc] back",
+    "[q] quit",
+];
+
 fn activity_screen(f: &mut Frame, inner: Rect, app: &App) {
     let rows = app.activity_rows();
     let width = inner.width as usize;
-    let list_h = (inner.height as usize).saturating_sub(3);
+    let keys = key_lines(width, &ACTIVITY_KEYS, &ACTIVITY_KEYS);
+    let list_h = (inner.height as usize).saturating_sub(2 + keys.len());
     let name_w = width
-        .saturating_sub(4 + 10 + 2 + 4 + 2 + 2 + 9 + 2 + 9 + 2 + 6 + 2 + 16)
-        .clamp(4, 40);
+        .saturating_sub(4 + 10 + 2 + 5 + 2 + 2 + 9 + 2 + 9 + 2 + 6 + 2 + 16)
+        .clamp(5, 40);
     let fmt = |sel: &str,
                mhz: &str,
                mode: &str,
@@ -1153,19 +1189,36 @@ fn activity_screen(f: &mut Frame, inner: Rect, app: &App) {
                hits: &str,
                last: &str| {
         format!(
-            "{sel:<2}{mhz:>10}  {mode:<4}  {:<name_w$}  {total:>9}  {session:>9}  {hits:>6}  {last}",
+            "{sel:<2}{mhz:>10}  {mode:<5}  {:<name_w$}  {total:>9}  {session:>9}  {hits:>6}  {last}",
             fit(name, name_w)
         )
     };
     let sel = app.activity_sel.min(rows.len().saturating_sub(1));
     let start = scroll_start(sel, rows.len(), list_h);
+    // Column headers, the sorted one with its direction.
+    let sort = app.activity_sort;
+    let head = |column: super::ActivityColumn, label: &str| {
+        if column == sort.column {
+            format!("{label}{}", if sort.descending { "▼" } else { "▲" })
+        } else {
+            label.to_string()
+        }
+    };
+    use super::ActivityColumn as C;
     let mut lines = vec![
         separator(
             inner.width,
             &format!("activity ({} frequencies)", rows.len()),
         ),
         Line::from(dim(fmt(
-            "", "MHz", "mode", "name", "total", "session", "hits", "last",
+            "",
+            &head(C::Freq, "MHz"),
+            &head(C::Mode, "mode"),
+            &head(C::Name, "name"),
+            &head(C::Total, "total"),
+            &head(C::Session, "session"),
+            &head(C::Hits, "hits"),
+            &head(C::Last, "last"),
         ))),
     ];
     for (i, r) in rows.iter().enumerate().skip(start).take(list_h) {
@@ -1174,8 +1227,8 @@ fn activity_screen(f: &mut Frame, inner: Rect, app: &App) {
             fmt(
                 if i == sel { "▶" } else { "" },
                 &app.ctx.freq_label(r.freq),
-                app.ctx.activity_mode(r).unwrap_or(""),
-                app.ctx.name_near(r.freq).unwrap_or(""),
+                r.mode.unwrap_or(""),
+                r.name.as_deref().unwrap_or(""),
                 &h_mm_ss(r.total),
                 &h_mm_ss(r.session),
                 &r.hits.to_string(),
@@ -1184,14 +1237,10 @@ fn activity_screen(f: &mut Frame, inner: Rect, app: &App) {
             i == sel,
         ));
     }
-    let [list, keys] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
+    let [list, keys_area] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(keys.len() as u16)]).areas(inner);
     f.render_widget(Paragraph::new(lines), list);
-    f.render_widget(
-        Paragraph::new(key_line(
-            "[↑↓] scroll  [l] add label  [x] exclude  [c] clear  [a/Esc] back  [q] quit",
-        )),
-        keys,
-    );
+    f.render_widget(Paragraph::new(keys), keys_area);
 }
 
 fn exclusions_screen(f: &mut Frame, inner: Rect, app: &App) {

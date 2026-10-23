@@ -200,6 +200,12 @@ body[data-list="excl"] #pane-excl { display: block; }
 .mode { display: inline-block; width: 38px; text-align: center; font-size: 10px; font-weight: 800; padding: 1px 0; border-radius: 3px; background: var(--card2); color: var(--dim); }
 .mode.digi { color: var(--digi); }
 .smallbtn { min-height: 32px; padding: 0 10px; border-radius: 5px; border: 1px solid var(--line); background: var(--card2); font-weight: 700; font-size: 13px; cursor: pointer; }
+/* activity sort: the headers are always shown, on a phone as a row of sort keys */
+#pane-activity .lrow.head { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 11px; font-weight: 700; color: var(--faint); text-transform: uppercase; letter-spacing: .3px; cursor: default; }
+.lrow.head [data-sort] { cursor: pointer; white-space: nowrap; }
+.lrow.head [data-sort].on { color: var(--text); }
+.lrow.head .ar { display: inline-block; width: 9px; margin-left: 2px; font-size: 9px; letter-spacing: 0; text-align: center; }
+.lrow.head .on .ar { color: var(--accent); }
 .smallbtn.del { min-height: 26px; padding: 0 8px; font-size: 12px; background: var(--del-bg); border-color: var(--del-bg); color: #fbeceb; }
 
 /* bottom tab bar (phone) */
@@ -243,7 +249,7 @@ nav.tabs button.active { color: var(--accent); }
   .lrow .mode { justify-self: start; }
   .lrow.head { display: grid; font-size: 11px; font-weight: 700; color: var(--faint); text-transform: uppercase; letter-spacing: .5px; cursor: default; }
   #pane-history .lrow  { grid-template-columns: 96px 44px minmax(60px, 1fr) 70px 50px 64px 84px; }
-  #pane-activity .lrow { grid-template-columns: 96px 44px minmax(60px, 1fr) 56px 60px 40px 124px; }
+  #pane-activity .lrow, #pane-activity .lrow.head { display: grid; gap: 10px; grid-template-columns: 96px 50px minmax(54px, 1fr) 58px 70px 48px 124px; }
   #pane-excl .lrow     { grid-template-columns: 96px minmax(120px, 1fr) minmax(160px, 2fr) 60px; }
 }
 .conn.off { background: var(--danger); }
@@ -341,7 +347,7 @@ body.nolocal #bAudio { grid-column: 1 / -1; }
       </div>
 
       <div class="listpane" id="pane-activity">
-        <div class="listhead"><h2>Activity</h2><span class="stats">sorted by total time</span><button class="smallbtn" id="bClear">Clear all</button></div>
+        <div class="listhead"><h2>Activity</h2><span class="stats"></span><button class="smallbtn" id="bClear">Clear all</button></div>
         <div id="activityList"></div>
       </div>
 
@@ -386,6 +392,7 @@ body.nolocal #bAudio { grid-column: 1 / -1; }
       <button class="btn warn" id="itExclude">✕ Exclude</button>
       <button class="btn" data-close>Cancel</button>
     </div>
+    <button class="btn warn" style="width:100%; margin-top:8px" id="itDelete" hidden>Delete from the activity log</button>
   </div>
 </div>
 
@@ -669,10 +676,38 @@ function renderHistory() {
       <span class="c" data-l="SNR">${fix1(h.snr)} dB</span><span class="c">${fix1(h.rssi)} dBFS</span></div>`).join("");
 }
 
+// Activity sort (per page, not remembered): text columns start ascending, numbers and times
+// descending. Entries without a name, mode or last time stay at the end in both directions.
+const ACT_COLS = [["freq", "Freq"], ["mode", "Mode"], ["name", "Name"], ["total", "Total"], ["session", "Session"], ["hits", "Hits"], ["last", "Last"]];
+const ACT_TEXT = ["mode", "name", "last"];
+let actSort = { col: "total", desc: true };
+let actView = [];
+function actKey(a, col) {
+  if (col === "total") return a.total_s;
+  if (col === "session") return a.session_s;
+  if (ACT_TEXT.includes(col)) return a[col] || "";
+  return a[col];
+}
+function sortActivity() {
+  const { col, desc } = actSort, text = ACT_TEXT.includes(col);
+  return S.activity.slice().sort((x, y) => {
+    const a = actKey(x, col), b = actKey(y, col);
+    if (text && (a === "") !== (b === "")) return a === "" ? 1 : -1;
+    const c = text ? a.localeCompare(b, undefined, { sensitivity: "base" }) : a - b;
+    return (desc ? -c : c) || x.freq - y.freq;
+  });
+}
+function setActSort(col) {
+  actSort = col === actSort.col ? { col, desc: !actSort.desc } : { col, desc: !["freq", "mode", "name"].includes(col) };
+  renderActivity();
+}
+
 function renderActivity() {
+  actView = sortActivity();
+  const arrow = c => c === actSort.col ? (actSort.desc ? "▼" : "▲") : "↕";
   $("activityList").innerHTML = S.activity.length === 0 ? `<div class="empty">the activity log is empty</div>` :
-    `<div class="lrow head"><span>Freq</span><span>Mode</span><span>Name</span><span>Total</span><span>Session</span><span>Hits</span><span>Last</span></div>` +
-    S.activity.map((a, i) => `<div class="lrow" data-a="${i}">
+    `<div class="lrow head">${ACT_COLS.map(([c, t]) => `<span data-sort="${c}"${c === actSort.col ? ' class="on"' : ""}>${t}<span class="ar">${arrow(c)}</span></span>`).join("")}</div>` +
+    actView.map((a, i) => `<div class="lrow" data-a="${i}">
       <span class="f">${esc(a.label)}</span>${modeTag(a.mode)}<span class="n">${esc(a.name)}</span><span class="br"></span>
       <span class="c" data-l="total">${esc(a.total)}</span><span class="c" data-l="session">${esc(a.session)}</span>
       <span class="c" data-l="hits">${a.hits}</span><span class="c" data-l="last">${esc(a.last)}</span></div>`).join("");
@@ -731,8 +766,9 @@ $("exWide").onclick = () => doExclude(true);
 
 // The item sheet names or excludes a channel (activity and history).
 let itTarget = null;
-function openItem(t, info) {
+function openItem(t, info, activity) {
   itTarget = t;
+  $("itDelete").hidden = !activity;
   $("itFreq").textContent = t.label + " MHz";
   $("itInfo").textContent = info;
   $("itName").value = t.name || "";
@@ -740,9 +776,10 @@ function openItem(t, info) {
   openSheet("itemSheet");
 }
 $("activityList").onclick = e => {
+  const h = e.target.closest("[data-sort]"); if (h) { setActSort(h.dataset.sort); return; }
   const it = e.target.closest("[data-a]"); if (!it) return;
-  const a = S.activity[+it.dataset.a]; if (!a) return;
-  openItem(a, `total ${a.total} · ${a.hits} hits · last ${a.last}`);
+  const a = actView[+it.dataset.a]; if (!a) return;
+  openItem(a, `total ${a.total} · ${a.hits} hits · last ${a.last}`, true);
 };
 $("historyList").onclick = e => {
   const it = e.target.closest("[data-h]"); if (!it) return;
@@ -760,6 +797,11 @@ $("itExclude").onclick = () => {
   // A history entry knows its plan channel, so its adjacent channels can be excluded too.
   const ch = itTarget.channel ?? null;
   openExclude(itTarget.freq, ch, itTarget.label, itTarget.name, ch !== null);
+};
+$("itDelete").onclick = () => {
+  const t = itTarget; if (!t) return;
+  closeSheet("itemSheet");
+  confirmBox(`Delete ${t.label} from the activity log?`, "Its total time and hits are removed and the file is saved. This cannot be undone.", () => send({ c: "delete_activity", freq: t.freq }));
 };
 $("exclList").onclick = e => {
   const b = e.target.closest("[data-del]"); if (!b) return;

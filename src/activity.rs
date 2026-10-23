@@ -148,6 +148,13 @@ impl ActivityLog {
         self.dirty = true;
     }
 
+    /// Removes one frequency (its total and session time).
+    pub fn remove(&mut self, freq: u64) {
+        self.entries.remove(&freq);
+        self.session.remove(&freq);
+        self.dirty = true;
+    }
+
     pub fn is_dirty(&self) -> bool {
         self.dirty
     }

@@ -165,8 +165,8 @@ impl UiContext {
         }
     }
 
-    /// Activity log rows sorted by descending total time.
-    pub(crate) fn activity_rows(&self) -> Vec<ActivityRow> {
+    /// Activity log rows, sorted as given.
+    pub(crate) fn activity_rows(&self, sort: ActivitySort) -> Vec<ActivityRow> {
         let Ok(log) = self.activity.lock() else {
             return Vec::new();
         };
@@ -175,24 +175,32 @@ impl UiContext {
             .iter()
             .map(|(&freq, e)| ActivityRow {
                 freq,
+                name: self.name_near(freq).map(str::to_string),
                 total: e.seconds,
                 session: log.session.get(&freq).copied().unwrap_or(0.0),
                 hits: e.hits,
                 last: e.last.clone().unwrap_or_default(),
-                mode: e.mode,
+                // `DIGI` when the channel file marks it digi (also after `[l]` with `[Tab]`),
+                // otherwise the mode of its last activity, if logged.
+                mode: if self.digi_near(freq) {
+                    Some(crate::plan::Modulation::Digi.name())
+                } else {
+                    e.mode.map(|m| m.name())
+                },
             })
             .collect();
-        rows.sort_by(|a, b| b.total.total_cmp(&a.total));
+        rows.sort_by(|a, b| sort.cmp(a, b));
         rows
     }
 
-    /// Mode shown for an activity log row: `DIGI` when the channel file marks it digi (also
-    /// after `[l]` with `[Tab]`), otherwise the mode of its last activity, if logged.
-    pub(crate) fn activity_mode(&self, row: &ActivityRow) -> Option<&'static str> {
-        if self.digi_near(row.freq) {
-            Some(crate::plan::Modulation::Digi.name())
-        } else {
-            row.mode.map(|m| m.name())
+    /// Removes one frequency from the activity log and saves the file at once.
+    pub(crate) fn delete_activity(&self, freq: u64) -> Result<(), String> {
+        match self.activity.lock() {
+            Ok(mut log) => {
+                log.remove(freq);
+                log.save(&self.activity_path)
+            }
+            Err(_) => Err("the activity log is not available".to_string()),
         }
     }
 
@@ -214,6 +222,108 @@ impl UiContext {
             .map(|l| l.clone())
             .unwrap_or_default()
     }
+}
+
+/// A column of the activity list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ActivityColumn {
+    Freq,
+    Mode,
+    Name,
+    Total,
+    Session,
+    Hits,
+    Last,
+}
+
+impl ActivityColumn {
+    /// In the order shown on the screen.
+    pub(crate) const ALL: [Self; 7] = [
+        Self::Freq,
+        Self::Mode,
+        Self::Name,
+        Self::Total,
+        Self::Session,
+        Self::Hits,
+        Self::Last,
+    ];
+}
+
+/// Sorting of the activity list: a column and a direction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ActivitySort {
+    pub(crate) column: ActivityColumn,
+    pub(crate) descending: bool,
+}
+
+impl Default for ActivitySort {
+    /// By descending total time.
+    fn default() -> Self {
+        Self {
+            column: ActivityColumn::Total,
+            descending: true,
+        }
+    }
+}
+
+impl ActivitySort {
+    /// The column `step` places to the right (left when negative), wrapping around. Text
+    /// columns start ascending, numbers and times descending.
+    fn moved(self, step: isize) -> Self {
+        let all = ActivityColumn::ALL;
+        let i = all.iter().position(|&c| c == self.column).unwrap_or(0) as isize;
+        let column = all[(i + step).rem_euclid(all.len() as isize) as usize];
+        let descending = !matches!(
+            column,
+            ActivityColumn::Freq | ActivityColumn::Mode | ActivityColumn::Name
+        );
+        Self { column, descending }
+    }
+
+    fn reversed(self) -> Self {
+        Self {
+            descending: !self.descending,
+            ..self
+        }
+    }
+
+    /// Order of two rows. Rows without a name, mode or last time stay at the end in both
+    /// directions; equal rows are ordered by frequency.
+    fn cmp(self, a: &ActivityRow, b: &ActivityRow) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        let dir = |o: Ordering| if self.descending { o.reverse() } else { o };
+        let text = |x: Option<&str>, y: Option<&str>| match (
+            x.filter(|s| !s.is_empty()),
+            y.filter(|s| !s.is_empty()),
+        ) {
+            (Some(x), Some(y)) => dir(x
+                .chars()
+                .flat_map(char::to_lowercase)
+                .cmp(y.chars().flat_map(char::to_lowercase))),
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            (None, None) => Ordering::Equal,
+        };
+        match self.column {
+            ActivityColumn::Freq => dir(a.freq.cmp(&b.freq)),
+            ActivityColumn::Mode => text(a.mode, b.mode),
+            ActivityColumn::Name => text(a.name.as_deref(), b.name.as_deref()),
+            ActivityColumn::Total => dir(a.total.total_cmp(&b.total)),
+            ActivityColumn::Session => dir(a.session.total_cmp(&b.session)),
+            ActivityColumn::Hits => dir(a.hits.cmp(&b.hits)),
+            ActivityColumn::Last => text(Some(&a.last), Some(&b.last)),
+        }
+        .then(a.freq.cmp(&b.freq))
+    }
+}
+
+/// A question on the activity screen, answered with `y` or `n`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ConfirmAction {
+    /// `[c] clear`: empty the whole activity log.
+    Clear,
+    /// `[d] delete`: remove this frequency from the activity log.
+    Delete(u64),
 }
 
 /// Matching tolerance of channel file names on the activity and exclusions screens.
@@ -311,13 +421,15 @@ struct App {
     history: VecDeque<HistoryItem>,
     screen: Screen,
     activity_sel: usize,
+    activity_sort: ActivitySort,
     exclusions_sel: usize,
     /// The selected detection history row (`[Tab]` on the main screen), `None` without one.
     history_sel: Option<usize>,
     cpu: CpuMeter,
     edit: Option<LabelEdit>,
-    /// Confirmation of clearing the activity log (`[c] clear`), with an error if saving failed.
-    confirm_clear: Option<Option<String>>,
+    /// A confirmation on the activity screen (`[c] clear`, `[d] delete`), with an error if
+    /// saving failed.
+    confirm: Option<(ConfirmAction, Option<String>)>,
 }
 
 /// Runs the TUI until the scanner finishes (the event channel closes).
@@ -337,11 +449,12 @@ pub fn run(
         history: VecDeque::new(),
         screen: Screen::Main,
         activity_sel: 0,
+        activity_sort: ActivitySort::default(),
         exclusions_sel: 0,
         history_sel: None,
         cpu: CpuMeter::new(),
         edit: None,
-        confirm_clear: None,
+        confirm: None,
     };
     let result = event_loop(&mut terminal, &mut app, &events, &commands);
     ratatui::restore();
@@ -382,7 +495,7 @@ fn event_loop(
                 }
                 continue;
             }
-            if app.confirm_clear.is_some() && !ctrl_c {
+            if app.confirm.is_some() && !ctrl_c {
                 app.confirm_key(key.code);
                 continue;
             }
@@ -529,7 +642,15 @@ impl App {
                             });
                         }
                     }
-                    KeyCode::Char('c') => self.confirm_clear = Some(None),
+                    KeyCode::Char('c') => self.confirm = Some((ConfirmAction::Clear, None)),
+                    KeyCode::Char('d') => {
+                        if let Some(r) = rows.get(self.activity_sel) {
+                            self.confirm = Some((ConfirmAction::Delete(r.freq), None));
+                        }
+                    }
+                    KeyCode::Left => self.sort_activity(self.activity_sort.moved(-1), &rows),
+                    KeyCode::Right => self.sort_activity(self.activity_sort.moved(1), &rows),
+                    KeyCode::Char('s') => self.sort_activity(self.activity_sort.reversed(), &rows),
                     KeyCode::Char('l') => {
                         if let Some(r) = rows.get(self.activity_sel) {
                             self.open_label(r.freq);
@@ -568,18 +689,42 @@ impl App {
         });
     }
 
-    /// A key in the clear confirmation: `y` clears the activity log and saves the empty file,
-    /// `n` or Esc cancels.
+    /// Sorts the activity list, keeping the selection on the same frequency.
+    fn sort_activity(&mut self, sort: ActivitySort, rows: &[ActivityRow]) {
+        let freq = rows.get(self.activity_sel).map(|r| r.freq);
+        self.activity_sort = sort;
+        if let Some(freq) = freq {
+            self.activity_sel = self
+                .activity_rows()
+                .iter()
+                .position(|r| r.freq == freq)
+                .unwrap_or(0);
+        }
+    }
+
+    /// A key in the confirmation: `y` clears the activity log or deletes the entry and saves
+    /// the file, `n` or Esc cancels.
     fn confirm_key(&mut self, code: KeyCode) {
+        let Some((action, _)) = self.confirm else {
+            return;
+        };
         match code {
-            KeyCode::Char('y') | KeyCode::Char('Y') => match self.ctx.clear_activity() {
-                Ok(()) => {
-                    self.confirm_clear = None;
-                    self.activity_sel = 0;
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                let result = match action {
+                    ConfirmAction::Clear => self.ctx.clear_activity(),
+                    ConfirmAction::Delete(freq) => self.ctx.delete_activity(freq),
+                };
+                match result {
+                    Ok(()) => {
+                        self.confirm = None;
+                        if action == ConfirmAction::Clear {
+                            self.activity_sel = 0;
+                        }
+                    }
+                    Err(e) => self.confirm = Some((action, Some(e))),
                 }
-                Err(e) => self.confirm_clear = Some(Some(e)),
-            },
-            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => self.confirm_clear = None,
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => self.confirm = None,
             _ => {}
         }
     }
@@ -643,7 +788,7 @@ impl App {
     }
 
     fn activity_rows(&self) -> Vec<ActivityRow> {
-        self.ctx.activity_rows()
+        self.ctx.activity_rows(self.activity_sort)
     }
 
     fn exclusion_list(&self) -> Vec<(u64, Option<String>)> {
@@ -653,12 +798,15 @@ impl App {
 
 pub(crate) struct ActivityRow {
     pub(crate) freq: u64,
+    /// Name from the channel file, if known.
+    pub(crate) name: Option<String>,
     pub(crate) total: f64,
     pub(crate) session: f64,
     pub(crate) hits: u64,
     pub(crate) last: String,
-    /// Mode of the last activity (older log lines have none).
-    pub(crate) mode: Option<crate::plan::Modulation>,
+    /// Mode shown: `DIGI` for a digi channel file entry, otherwise the mode of the last
+    /// activity (older log lines have none).
+    pub(crate) mode: Option<&'static str>,
 }
 
 /// Moves a list selection with the arrow, page and home/end keys.
@@ -744,6 +892,7 @@ mod tests {
             history: VecDeque::new(),
             screen: Screen::Main,
             activity_sel: 0,
+            activity_sort: ActivitySort::default(),
             exclusions_sel: 0,
             history_sel: None,
             cpu: CpuMeter {
@@ -753,7 +902,7 @@ mod tests {
                 ram: Some(48 << 20),
             },
             edit: None,
-            confirm_clear: None,
+            confirm: None,
         };
         a.apply(UiEvent::Status(Status {
             state: ScanState::Scanning,
@@ -858,12 +1007,12 @@ mod tests {
         assert!(pop.contains("label: 145.500 MHz") && pop.contains("> CALLING"));
         assert!(pop.contains("digi: [x]") && pop.contains("[Tab] digi"));
         paused.edit = None;
-        paused.confirm_clear = Some(None);
+        paused.confirm = Some((ConfirmAction::Clear, None));
         let confirm = render(&paused, 100, 30);
         println!("{confirm}\n");
         assert!(confirm.contains("Are you sure? [y]es / [n]o"));
         // Exclusion note popup and the list with notes.
-        paused.confirm_clear = None;
+        paused.confirm = None;
         paused.screen = Screen::Exclusions;
         paused.edit = Some(LabelEdit {
             kind: EditKind::Exclude {
@@ -1012,6 +1161,73 @@ mod tests {
         println!("{screen}\n");
         assert!(screen.contains("mode") && screen.contains("145.500  NFM"));
         assert!(screen.contains("438.800  DIGI"));
+    }
+
+    /// The activity screen sorts by any column (`←`/`→`, `s` reverses) with the selection kept
+    /// on the same frequency, and `[d]` deletes the selected entry after a confirmation.
+    #[test]
+    fn activity_sort_delete() {
+        let mut a = app();
+        let path =
+            std::env::temp_dir().join(format!("rfscan-test-activity-{}.txt", std::process::id()));
+        a.ctx.activity_path = path.clone();
+        if let Ok(mut log) = a.ctx.activity.lock() {
+            log.hit(145_500_000, Modulation::Nfm);
+            log.add_seconds(145_500_000, 30.0);
+            log.hit(433_500_000, Modulation::Nfm);
+            log.hit(433_500_000, Modulation::Nfm);
+            log.add_seconds(433_500_000, 10.0);
+            log.hit(434_000_000, Modulation::Nfm);
+            log.add_seconds(434_000_000, 20.0);
+        }
+        a.ctx.channel_db = vec![
+            (433_500_000, "calling".into()),
+            (434_000_000, "Repeater".into()),
+        ];
+        a.screen = Screen::Activity;
+        let freqs = |a: &App| a.activity_rows().iter().map(|r| r.freq).collect::<Vec<_>>();
+        // By descending total time at first.
+        assert_eq!(freqs(&a), [145_500_000, 434_000_000, 433_500_000]);
+        assert!(render(&a, 100, 30).contains("total▼"));
+        a.key(KeyCode::Down);
+        a.key(KeyCode::Right);
+        a.key(KeyCode::Right);
+        assert_eq!(a.activity_sort.column, ActivityColumn::Hits);
+        assert_eq!(freqs(&a)[0], 433_500_000);
+        assert_eq!(a.activity_rows()[a.activity_sel].freq, 434_000_000);
+        // Name: ascending, case-insensitive, without a name at the end in both directions.
+        for _ in 0..3 {
+            a.key(KeyCode::Left);
+        }
+        assert_eq!(
+            a.activity_sort,
+            ActivitySort {
+                column: ActivityColumn::Name,
+                descending: false
+            }
+        );
+        assert_eq!(freqs(&a), [433_500_000, 434_000_000, 145_500_000]);
+        a.key(KeyCode::Char('s'));
+        assert_eq!(freqs(&a), [434_000_000, 433_500_000, 145_500_000]);
+        let screen = render(&a, 100, 30);
+        println!("{screen}\n");
+        assert!(screen.contains("name▼") && screen.contains("[←→] sort"));
+        // Delete: `n` keeps the entry, `y` removes it and saves the file.
+        a.key(KeyCode::Char('d'));
+        assert_eq!(a.confirm, Some((ConfirmAction::Delete(434_000_000), None)));
+        let pop = render(&a, 100, 30);
+        println!("{pop}\n");
+        assert!(pop.contains("delete 434.000 MHz Repeater"));
+        a.confirm_key(KeyCode::Char('n'));
+        assert_eq!(a.confirm, None);
+        assert_eq!(freqs(&a).len(), 3);
+        a.key(KeyCode::Char('d'));
+        a.confirm_key(KeyCode::Char('y'));
+        let saved = std::fs::read_to_string(&path).unwrap_or_default();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(a.confirm, None);
+        assert_eq!(freqs(&a), [433_500_000, 145_500_000]);
+        assert!(saved.contains("145.500:") && !saved.contains("434.000"));
     }
 
     /// `[Tab]` selects a history row, the selection follows its activity when new ones arrive,

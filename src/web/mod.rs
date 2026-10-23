@@ -31,7 +31,7 @@ use crate::audio_dsp::Sos;
 use crate::demod::Resampler;
 use crate::dsd_fme::DsdState;
 use crate::events::{Command, HistoryItem, LockView, ScanState, Spectrum, Status, UiEvent};
-use crate::ui::{CpuMeter, UiContext};
+use crate::ui::{ActivitySort, CpuMeter, UiContext};
 
 /// The page: HTML, CSS and JavaScript in one file, bundled in the program.
 const INDEX_HTML: &str = include_str!("index.html");
@@ -416,6 +416,9 @@ enum ClientMsg {
         digi: bool,
     },
     ClearActivity,
+    DeleteActivity {
+        freq: u64,
+    },
     RemoveExclusion {
         freq: u64,
     },
@@ -512,6 +515,12 @@ fn handle(hub: &Hub, cmd: ClientMsg) -> Option<Value> {
         }
         ClientMsg::ClearActivity => {
             if let Err(e) = ctx.clear_activity() {
+                return Some(error_json(&e));
+            }
+            return Some(activity_json(&ctx));
+        }
+        ClientMsg::DeleteActivity { freq } => {
+            if let Err(e) = ctx.delete_activity(freq) {
                 return Some(error_json(&e));
             }
             return Some(activity_json(&ctx));
@@ -856,16 +865,19 @@ fn history_json(ctx: &UiContext, history: &VecDeque<HistoryItem>) -> Value {
 fn activity_json(ctx: &UiContext) -> Value {
     let seconds = |s: f64| format_duration(Duration::from_secs_f64(s.max(0.0)));
     let items: Vec<Value> = ctx
-        .activity_rows()
+        .activity_rows(ActivitySort::default())
         .iter()
         .map(|r| {
             json!({
                 "freq": r.freq,
                 "label": ctx.freq_label(r.freq),
-                "name": ctx.name_near(r.freq),
-                "mode": ctx.activity_mode(r),
+                "name": r.name,
+                "mode": r.mode,
                 "total": seconds(r.total),
                 "session": seconds(r.session),
+                // Seconds for sorting in the browser.
+                "total_s": r.total,
+                "session_s": r.session,
                 "hits": r.hits,
                 // `last` is ISO 8601 local time: the date and the time without seconds.
                 "last": r.last.get(..16).unwrap_or(&r.last).replace('T', " "),
