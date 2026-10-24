@@ -92,3 +92,37 @@ case ":$PATH:" in
     *":$PREFIX/bin:"*) ;;
     *) echo "note: $PREFIX/bin is not in PATH" ;;
 esac
+
+# RTL-SDR: the kernel's DVB-T driver takes the receiver when it is plugged in. Only a warning
+# with the commands; the script changes no system settings.
+DVB=dvb_usb_rtl28xxu
+loaded=0
+blocked=0
+grep -qs "^$DVB " /proc/modules && loaded=1
+grep -qsE "^[[:space:]]*(blacklist[[:space:]]+$DVB|install[[:space:]]+$DVB[[:space:]]+/bin/(false|true))" \
+    /etc/modprobe.d/*.conf /usr/lib/modprobe.d/*.conf /lib/modprobe.d/*.conf && blocked=1
+if [ "$blocked" -eq 0 ] && { [ "$loaded" -eq 1 ] || PATH="$PATH:/sbin:/usr/sbin" modinfo "$DVB" >/dev/null 2>&1; }; then
+    cat <<EOF
+
+note for RTL-SDR receivers (not needed for Airspy or SDRplay):
+the kernel's DVB-T driver ($DVB) is not blocked. It takes the receiver when it is
+plugged in; librtlsdr detaches it when rfscan opens the receiver, but after a few runs the
+stream may stop ("the stream delivers no samples") or the receiver may not open at all.
+Block the driver once: unplug the receiver, run
+
+  printf 'blacklist $DVB\nblacklist rtl2832_sdr\nblacklist rtl2832\n' | sudo tee /etc/modprobe.d/blacklist-rtlsdr.conf
+  sudo modprobe -r $DVB rtl2832_sdr rtl2832
+
+and plug it in again (see DOC.md, Installation).
+EOF
+elif [ "$loaded" -eq 1 ]; then
+    cat <<EOF
+
+note for RTL-SDR receivers: the DVB-T driver ($DVB) is blocked but still loaded.
+Unplug the receiver, run
+
+  sudo modprobe -r $DVB rtl2832_sdr rtl2832
+
+and plug it in again.
+EOF
+fi
