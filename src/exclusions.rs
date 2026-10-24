@@ -7,18 +7,48 @@
 //!
 //! Changes from the TUI: adding an entry appends a line and flushes it at once, so a
 //! crash loses nothing; removing an entry rewrites the file atomically (temporary file + rename),
-//! keeping comments and lines the program does not understand.
+//! keeping comments and lines the program does not understand. Timed exclusions (`x` with a
+//! duration) are kept in memory only and end by themselves.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use crate::plan::ScanPlan;
 
 /// Exclusion file name in the user's configuration directory.
 const FILE_NAME: &str = "rfscan-exclude.txt";
 
-/// File entries with their notes, shared between the scanner and the TUI.
-pub type SharedList = std::sync::Arc<std::sync::Mutex<Vec<(u64, Option<String>)>>>;
+/// Durations offered for a timed exclusion (minutes).
+pub const TIMED_MINUTES: [u32; 3] = [10, 30, 60];
+
+/// One entry of the exclusion list as shown: `until` is set for a timed exclusion.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Item {
+    pub freq: u64,
+    pub note: Option<String>,
+    pub until: Option<Instant>,
+}
+
+impl Item {
+    /// Whole minutes left of a timed exclusion, rounded up.
+    pub fn minutes_left(&self, now: Instant) -> Option<u64> {
+        self.until
+            .map(|t| t.saturating_duration_since(now).as_secs().div_ceil(60))
+    }
+}
+
+/// The exclusion list (timed entries first, then the file), shared between the scanner and the
+/// interfaces.
+pub type SharedList = std::sync::Arc<std::sync::Mutex<Vec<Item>>>;
+
+/// A timed exclusion: not saved, it ends at `until`.
+#[derive(Clone, Debug)]
+pub struct Timed {
+    pub freq: u64,
+    pub note: Option<String>,
+    pub until: Instant,
+}
 
 #[derive(Debug, Default)]
 pub struct Exclusions {
@@ -28,6 +58,8 @@ pub struct Exclusions {
     pub notes: Vec<Option<String>>,
     /// Temporary exclusions from `--exclude` (Hz), never saved.
     pub temp: Vec<u64>,
+    /// Timed exclusions added during the run, never saved.
+    pub timed: Vec<Timed>,
 }
 
 /// Default exclusion file path (user's configuration directory).
@@ -95,6 +127,7 @@ impl Exclusions {
                         entries,
                         notes,
                         temp: Vec::new(),
+                        timed: Vec::new(),
                     },
                     warnings,
                 ))
@@ -128,6 +161,7 @@ impl Exclusions {
                 self.entries
                     .iter()
                     .chain(&self.temp)
+                    .chain(self.timed.iter().map(|t| &t.freq))
                     .any(|&f| (c.freq as f64 - f as f64).abs() <= c.spacing / 2.0)
             })
             .collect()
@@ -147,7 +181,45 @@ impl Exclusions {
         self.entries.extend_from_slice(freqs);
         self.notes
             .extend(freqs.iter().map(|_| note.map(str::to_string)));
+        // A permanent entry replaces a timed one.
+        self.timed.retain(|t| !freqs.contains(&t.freq));
         Ok(())
+    }
+
+    /// Adds timed exclusions ending after `minutes` (not saved). A frequency that is already
+    /// timed gets the new end and note.
+    pub fn add_timed(&mut self, freqs: &[u64], note: Option<&str>, minutes: u32, now: Instant) {
+        let until = now + Duration::from_secs(u64::from(minutes) * 60);
+        self.timed.retain(|t| !freqs.contains(&t.freq));
+        self.timed.extend(freqs.iter().map(|&freq| Timed {
+            freq,
+            note: note.map(str::to_string),
+            until,
+        }));
+    }
+
+    /// Removes timed exclusions; returns whether any was removed.
+    pub fn remove_timed(&mut self, freqs: &[u64]) -> bool {
+        let n = self.timed.len();
+        self.timed.retain(|t| !freqs.contains(&t.freq));
+        self.timed.len() != n
+    }
+
+    /// The earliest end of a timed exclusion.
+    pub fn next_expiry(&self) -> Option<Instant> {
+        self.timed.iter().map(|t| t.until).min()
+    }
+
+    /// Removes the timed exclusions that ended by `now` and returns their frequencies.
+    pub fn expire(&mut self, now: Instant) -> Vec<u64> {
+        let ended = self
+            .timed
+            .iter()
+            .filter(|t| t.until <= now)
+            .map(|t| t.freq)
+            .collect();
+        self.timed.retain(|t| t.until > now);
+        ended
     }
 
     /// Removes `freqs` from the file (atomic rewrite) and from the list.
@@ -165,13 +237,26 @@ impl Exclusions {
         Ok(())
     }
 
-    /// File entries with their notes, in file order.
-    pub fn with_notes(&self) -> Vec<(u64, Option<String>)> {
-        self.entries
+    /// The list as shown: timed entries (soonest end first), then the file entries with their
+    /// notes in file order.
+    pub fn items(&self) -> Vec<Item> {
+        let mut timed: Vec<&Timed> = self.timed.iter().collect();
+        timed.sort_by_key(|t| t.until);
+        let timed = timed.into_iter().map(|t| Item {
+            freq: t.freq,
+            note: t.note.clone(),
+            until: Some(t.until),
+        });
+        let file = self
+            .entries
             .iter()
-            .copied()
             .zip(self.notes.iter().cloned().chain(std::iter::repeat(None)))
-            .collect()
+            .map(|(&freq, note)| Item {
+                freq,
+                note,
+                until: None,
+            });
+        timed.chain(file).collect()
     }
 }
 
@@ -265,6 +350,20 @@ mod tests {
         assert_eq!(m.iter().filter(|&&x| x).count(), 2);
         assert!(ex.add_cli("145.0-145.1").is_err());
         assert!(ex.add_cli("xyz").is_err());
+
+        // A timed exclusion masks its channel until it ends, and is listed first.
+        let now = std::time::Instant::now();
+        ex.entries.push(145_500_000);
+        ex.add_timed(&[145_200_000], Some("beacon"), 10, now);
+        assert!(ex.mask(&p)[idx(145_200_000)]);
+        let items = ex.items();
+        assert_eq!(items[0].freq, 145_200_000);
+        assert_eq!(items[0].minutes_left(now), Some(10));
+        assert_eq!(items[1].until, None);
+        let later = now + Duration::from_secs(9 * 60);
+        assert!(ex.expire(later).is_empty());
+        assert_eq!(ex.expire(later + Duration::from_secs(60)), [145_200_000]);
+        assert!(!ex.mask(&p)[idx(145_200_000)] && ex.next_expiry().is_none());
     }
 
     /// Adding appends (also after a last line without a newline), removing keeps comments and

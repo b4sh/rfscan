@@ -272,7 +272,7 @@ impl ExclusionCtl {
         plan: &ScanPlan,
     ) -> Self {
         let mut ctl = ExclusionCtl {
-            shared: Arc::new(Mutex::new(list.with_notes())),
+            shared: Arc::new(Mutex::new(list.items())),
             list,
             path,
             masked,
@@ -296,16 +296,29 @@ impl ExclusionCtl {
             *m |= d;
         }
         if let Ok(mut s) = self.shared.lock() {
-            *s = self.list.with_notes();
+            *s = self.list.items();
         }
     }
 
-    fn add(&mut self, plan: &ScanPlan, freqs: Vec<u64>, note: Option<&str>) -> Result<(), String> {
+    /// Adds exclusions: to the file, or for `minutes` in memory only.
+    fn add(
+        &mut self,
+        plan: &ScanPlan,
+        freqs: Vec<u64>,
+        note: Option<&str>,
+        minutes: Option<u32>,
+    ) -> Result<(), String> {
         let new: Vec<u64> = freqs
             .into_iter()
             .filter(|f| !self.list.entries.contains(f))
             .collect();
         if new.is_empty() {
+            return Ok(());
+        }
+        if let Some(minutes) = minutes {
+            self.list.add_timed(&new, note, minutes, Instant::now());
+            self.added.push(new);
+            self.rebuild(plan);
             return Ok(());
         }
         // Airband channels on the 25 kHz raster keep their 25 kHz channel number in the file.
@@ -324,10 +337,44 @@ impl ExclusionCtl {
         Ok(())
     }
 
+    /// Removes exclusions: timed ones from memory, file ones from the file.
     fn remove(&mut self, plan: &ScanPlan, freqs: &[u64]) -> Result<(), String> {
-        self.list.remove(&self.path, freqs)?;
+        self.list.remove_timed(freqs);
+        let saved: Vec<u64> = freqs
+            .iter()
+            .copied()
+            .filter(|f| self.list.entries.contains(f))
+            .collect();
+        let result = if saved.is_empty() {
+            Ok(())
+        } else {
+            self.list.remove(&self.path, &saved)
+        };
         self.rebuild(plan);
-        Ok(())
+        result
+    }
+
+    /// Saves a timed exclusion to the file with its note. Returns false when `freq` is not timed.
+    fn keep(&mut self, plan: &ScanPlan, freq: u64) -> Result<bool, String> {
+        let Some(t) = self.list.timed.iter().find(|t| t.freq == freq) else {
+            return Ok(false);
+        };
+        let note = t.note.clone();
+        self.add(plan, vec![freq], note.as_deref(), None)?;
+        // Undo applies to the batch the exclusion was added with, not to this save.
+        self.added.pop();
+        Ok(true)
+    }
+
+    /// Ends the timed exclusions due by `now`; returns their frequencies (empty when none is
+    /// due, without allocating).
+    fn expire(&mut self, plan: &ScanPlan, now: Instant) -> Vec<u64> {
+        if self.list.next_expiry().is_none_or(|t| t > now) {
+            return Vec::new();
+        }
+        let ended = self.list.expire(now);
+        self.rebuild(plan);
+        ended
     }
 }
 
@@ -581,6 +628,7 @@ pub fn run(
                     channel,
                     wide,
                     note,
+                    minutes,
                 } => {
                     // `X`: also the adjacent channels on the grid of the channel.
                     let spacing = channel
@@ -594,14 +642,15 @@ pub fn run(
                     let freqs: Vec<u64> = (-n..=n)
                         .map(|k| (freq as f64 + k as f64 * spacing).round() as u64)
                         .collect();
-                    match exclusions.add(plan, freqs, note.as_deref()) {
+                    match exclusions.add(plan, freqs, note.as_deref(), minutes) {
                         Ok(()) => logev!(
                             log,
                             Level::Info,
                             now,
-                            "EXCLUDED  {} MHz{}{}",
+                            "EXCLUDED  {} MHz{}{}{}",
                             format_mhz(freq),
                             if n > 0 { " with adjacent channels" } else { "" },
+                            minutes.map_or(String::new(), |m| format!(" for {m} min")),
                             note.as_deref()
                                 .map_or(String::new(), |n| format!("  # {n}"))
                         ),
@@ -640,6 +689,20 @@ pub fn run(
                     }
                     send(UiEvent::ExclusionsChanged);
                 }
+                Command::KeepExclusion(f) => {
+                    match exclusions.keep(plan, f) {
+                        Ok(true) => logev!(
+                            log,
+                            Level::Info,
+                            now,
+                            "KEPT      exclusion {} MHz (saved to the file)",
+                            format_mhz(f)
+                        ),
+                        Ok(false) => {}
+                        Err(e) => logwarn!(log, "WARNING: {e}"),
+                    }
+                    send(UiEvent::ExclusionsChanged);
+                }
             }
             if let (true, Some(l)) = (leave, current) {
                 let end = match state {
@@ -660,6 +723,18 @@ pub fn run(
         }
         if quit {
             break;
+        }
+        // Timed exclusions that ended: the channels are scanned again from the next window.
+        let now = Instant::now();
+        for f in exclusions.expire(plan, now) {
+            logev!(
+                log,
+                Level::Info,
+                now,
+                "EXPIRED   exclusion {} MHz",
+                format_mhz(f)
+            );
+            send(UiEvent::ExclusionsChanged);
         }
 
         state = match state {

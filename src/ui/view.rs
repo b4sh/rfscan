@@ -14,6 +14,7 @@ use super::{App, Screen, bigtext};
 use crate::activity::format_mhz;
 use crate::dsd_fme::DsdState;
 use crate::events::{LockView, ScanState, Spectrum};
+use crate::exclusions::TIMED_MINUTES;
 use crate::plan::Modulation;
 
 /// Minimum terminal size; below it only a message is shown.
@@ -286,7 +287,7 @@ fn label_popup(f: &mut Frame, area: Rect, app: &App, edit: &super::LabelEdit) {
             "> ",
             "[Enter] save to the channel file  [Tab] digi  [Esc] cancel",
         ),
-        super::EditKind::Exclude { channel, wide } => (
+        super::EditKind::Exclude { channel, wide, .. } => (
             if wide && channel.is_some() {
                 " exclude with adjacent channels: ".to_string()
             } else {
@@ -294,7 +295,7 @@ fn label_popup(f: &mut Frame, area: Rect, app: &App, edit: &super::LabelEdit) {
             },
             Color::Yellow,
             "note: ",
-            "[Enter] exclude (the note is optional)   [Esc] cancel",
+            "[Enter] exclude (note optional) [Tab] duration [Esc] cancel",
         ),
     };
     let w = 64.min(area.width.saturating_sub(4));
@@ -330,11 +331,25 @@ fn label_popup(f: &mut Frame, area: Rect, app: &App, edit: &super::LabelEdit) {
             Span::styled("█", Style::new().fg(BRIGHT)),
         ]),
     ];
-    if let super::EditKind::Label { digi, .. } = edit.kind {
-        lines.push(Line::from(vec![
+    match edit.kind {
+        super::EditKind::Label { digi, .. } => lines.push(Line::from(vec![
             text("digi: "),
             if digi { bright("[x]") } else { text("[ ]") },
-        ]));
+        ])),
+        // The chosen duration in brackets: permanent (saved) or a timed exclusion.
+        super::EditKind::Exclude { minutes, .. } => {
+            let mut spans = vec![text("for: ")];
+            let options = std::iter::once(None).chain(TIMED_MINUTES.iter().map(|&m| Some(m)));
+            for m in options {
+                let label = m.map_or("permanent".to_string(), |m| format!("{m} min"));
+                spans.push(if m == minutes {
+                    bright(format!("[{label}]"))
+                } else {
+                    text(format!(" {label} "))
+                });
+            }
+            lines.push(Line::from(spans));
+        }
     }
     lines.extend([
         match &edit.error {
@@ -1248,31 +1263,42 @@ fn exclusions_screen(f: &mut Frame, inner: Rect, app: &App) {
     let list_h = (inner.height as usize).saturating_sub(2);
     let sel = app.exclusions_sel.min(list.len().saturating_sub(1));
     let start = scroll_start(sel, list.len(), list_h);
+    let timed = list.iter().filter(|e| e.until.is_some()).count();
     let mut lines = vec![separator(
         inner.width,
         &format!(
-            "exclusions ({}): {}",
+            "exclusions ({}{}): {}",
             list.len(),
+            if timed > 0 {
+                format!(", {timed} timed")
+            } else {
+                String::new()
+            },
             app.ctx.exclusions_path.display()
         ),
     )];
-    // Columns: frequency, note (the comment in the file), channel name (if known).
+    // Columns: frequency, time left (timed exclusions), note (the comment in the file), channel
+    // name (if known).
     let width = inner.width as usize;
-    let note_w = width.saturating_sub(2 + 14 + 4 + 3 + 24).clamp(10, 50);
+    let note_w = width.saturating_sub(2 + 14 + 4 + 9 + 3 + 24).clamp(10, 50);
     if !list.is_empty() {
         lines.push(Line::from(dim(format!(
-            "  {:>14} {:<3}  {:<note_w$}   name",
-            "", "MHz", "note"
+            "  {:>14} {:<3}  {:<7}  {:<note_w$}   name",
+            "", "MHz", "for", "note"
         ))));
     }
-    for (i, (hz, note)) in list.iter().enumerate().skip(start).take(list_h) {
-        let name = app.ctx.name_near(*hz).unwrap_or("");
+    let now = Instant::now();
+    for (i, e) in list.iter().enumerate().skip(start).take(list_h) {
+        let name = app.ctx.name_near(e.freq).unwrap_or("");
+        let left = e
+            .minutes_left(now)
+            .map_or(String::new(), |m| format!("{m} min"));
         lines.push(selected(
             format!(
-                "{:<2}{:>14} MHz  {:<note_w$}   {name}",
+                "{:<2}{:>14} MHz  {left:<7}  {:<note_w$}   {name}",
                 if i == sel { "▶" } else { "" },
-                app.ctx.freq_label(*hz),
-                fit(note.as_deref().unwrap_or(""), note_w)
+                app.ctx.freq_label(e.freq),
+                fit(e.note.as_deref().unwrap_or(""), note_w)
             ),
             i == sel,
         ));
@@ -1284,7 +1310,7 @@ fn exclusions_screen(f: &mut Frame, inner: Rect, app: &App) {
     f.render_widget(Paragraph::new(lines), body);
     f.render_widget(
         Paragraph::new(key_line(
-            "[↑↓] scroll   [d] delete (saves the file)   [e/Esc] back   [q] quit",
+            "[↑↓] scroll   [d] delete   [s] keep a timed one (saves it)   [e/Esc] back   [q] quit",
         )),
         keys,
     );

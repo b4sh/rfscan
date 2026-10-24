@@ -197,6 +197,11 @@ body[data-list="excl"] #pane-excl { display: block; }
 .lrow .c[data-l]::before { content: attr(data-l) " "; color: var(--faint); }
 .lrow .note { color: var(--hang); }
 .lrow .br { flex-basis: 100%; height: 0; }
+.lrow .acts { display: flex; gap: 6px; margin-left: auto; }
+/* duration of an exclusion: permanent or timed */
+.durs { display: flex; gap: 6px; margin-bottom: 10px; }
+.durs .smallbtn { flex: 1; color: var(--text); }
+.durs .smallbtn.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .mode { display: inline-block; width: 38px; text-align: center; font-size: 10px; font-weight: 800; padding: 1px 0; border-radius: 3px; background: var(--card2); color: var(--dim); }
 .mode.digi { color: var(--digi); }
 .smallbtn { min-height: 32px; padding: 0 10px; border-radius: 5px; border: 1px solid var(--line); background: var(--card2); font-weight: 700; font-size: 13px; cursor: pointer; }
@@ -206,6 +211,7 @@ body[data-list="excl"] #pane-excl { display: block; }
 .lrow.head [data-sort].on { color: var(--text); }
 .lrow.head .ar { display: inline-block; width: 9px; margin-left: 2px; font-size: 9px; letter-spacing: 0; text-align: center; }
 .lrow.head .on .ar { color: var(--accent); }
+.smallbtn.keep { min-height: 26px; padding: 0 8px; font-size: 12px; color: var(--text); }
 .smallbtn.del { min-height: 26px; padding: 0 8px; font-size: 12px; background: var(--del-bg); border-color: var(--del-bg); color: #fbeceb; }
 
 /* bottom tab bar (phone) */
@@ -250,7 +256,8 @@ nav.tabs button.active { color: var(--accent); }
   .lrow.head { display: grid; font-size: 11px; font-weight: 700; color: var(--faint); text-transform: uppercase; letter-spacing: .5px; cursor: default; }
   #pane-history .lrow  { grid-template-columns: 96px 44px minmax(60px, 1fr) 70px 50px 64px 84px; }
   #pane-activity .lrow, #pane-activity .lrow.head { display: grid; gap: 10px; grid-template-columns: 96px 50px minmax(54px, 1fr) 58px 70px 48px 124px; }
-  #pane-excl .lrow     { grid-template-columns: 96px minmax(120px, 1fr) minmax(160px, 2fr) 60px; }
+  #pane-excl .lrow     { grid-template-columns: 96px minmax(120px, 1fr) 56px minmax(140px, 2fr) 132px; }
+  #pane-excl .acts     { justify-content: flex-end; }
 }
 .conn.off { background: var(--danger); }
 .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 70px; z-index: 40; max-width: 90%; background: var(--danger); color: #fff; padding: 8px 14px; border-radius: 6px; font-weight: 600; display: none; }
@@ -372,6 +379,7 @@ body.nolocal #bAudio { grid-column: 1 / -1; }
     <h3>Exclude <span id="exFreq"></span></h3>
     <div class="sub" id="exName"></div>
     <input type="text" id="exNote" maxlength="40" placeholder="Note (optional), e.g. interference">
+    <div class="durs" id="exDurs"></div>
     <button class="btn danger" style="width:100%" id="exOne">✕ Exclude</button>
     <div class="row">
       <button class="btn warn" id="exWide">Exclude ±2 channels</button>
@@ -419,7 +427,7 @@ const modeTag = m => m ? `<span class="mode ${m === "DIGI" ? "digi" : ""}">${esc
 const fix1 = x => (x == null ? "-" : Number(x).toFixed(1));
 
 // State from rfscan: the last message of each kind.
-const S = { hello: null, status: null, lock: null, spectrum: null, history: [], activity: [], excl: [] };
+const S = { hello: null, status: null, lock: null, spectrum: null, history: [], activity: [], excl: [], exclAt: 0 };
 let ws = null;
 
 function send(o) {
@@ -461,7 +469,7 @@ function connect() {
       case "history": S.history = m.items; renderHistory(); break;
       case "history_add": S.history.unshift(m.item); S.history.length = Math.min(S.history.length, 200); renderHistory(); break;
       case "activity": S.activity = m.items; renderActivity(); break;
-      case "exclusions": S.excl = m.items; renderExcl(); break;
+      case "exclusions": S.excl = m.items; S.exclAt = Date.now(); renderExcl(); break;
       case "error": toast(m.msg); break;
     }
   };
@@ -531,6 +539,8 @@ function renderHello() {
   $("device").textContent = `${h.device} · ${h.rate}`;
   document.body.classList.toggle("nolocal", !h.local_audio);
   $("exWide").textContent = `Exclude ±${h.exclude_wide} channel${h.exclude_wide === 1 ? "" : "s"}`;
+  $("exDurs").innerHTML = [null, ...(h.exclude_minutes || [])].map(m =>
+    `<button class="smallbtn" data-min="${m ?? ""}">${m ? m + " min" : "Permanent"}</button>`).join("");
   $("about").innerHTML = `rfscan ${esc(h.version)} · AGPL-3.0` +
     (h.source ? ` · <a href="${esc(h.source)}" target="_blank" rel="noopener">source code</a>` : "");
 }
@@ -713,15 +723,23 @@ function renderActivity() {
       <span class="c" data-l="hits">${a.hits}</span><span class="c" data-l="last">${esc(a.last)}</span></div>`).join("");
 }
 
+// Whole minutes left of a timed exclusion, counted down from when the list arrived.
+function exclLeft(e) {
+  return Math.ceil(Math.max(0, e.left_s * 1000 - (Date.now() - S.exclAt)) / 60000);
+}
 function renderExcl() {
   $("exclList").innerHTML = S.excl.length === 0 ? `<div class="empty">no exclusions</div>` :
-    `<div class="lrow head"><span>Freq</span><span>Name</span><span>Note</span><span></span></div>` +
+    `<div class="lrow head"><span>Freq</span><span>Name</span><span>For</span><span>Note</span><span></span></div>` +
     S.excl.map((e, i) => `<div class="lrow">
       <span class="f">${esc(e.label)}</span><span class="n">${esc(e.name)}</span><span class="br"></span>
+      <span class="c">${e.left_s == null ? "" : "⏱ " + exclLeft(e) + " min"}</span>
       <span class="c note">${e.note ? "# " + esc(e.note) : ""}</span>
-      <span><button class="smallbtn del" data-del="${i}">Delete</button></span></div>`).join("");
-  $("exclCount").textContent = S.excl.length + " entries";
+      <span class="acts">${e.left_s == null ? "" : `<button class="smallbtn keep" data-keep="${i}">Keep</button>`}<button class="smallbtn del" data-del="${i}">Delete</button></span></div>`).join("");
+  const timed = S.excl.filter(e => e.left_s != null).length;
+  $("exclCount").textContent = S.excl.length + " entries" + (timed ? `, ${timed} timed` : "");
 }
+// The minutes left tick down between list updates.
+setInterval(() => { if (S.excl.some(e => e.left_s != null)) renderExcl(); }, 15000);
 
 /* ---- tabs, sheets ---- */
 function setTab(t) {
@@ -747,8 +765,15 @@ $("cfYes").onclick = () => { closeSheet("confirm"); if (onConfirm) onConfirm(); 
 
 // Exclusion target, taken when the sheet opens (like the x key in the TUI).
 let exTarget = null;
+let exMinutes = null;
+function setExMinutes(m) {
+  exMinutes = m;
+  document.querySelectorAll("#exDurs [data-min]").forEach(b => b.classList.toggle("on", (+b.dataset.min || null) === m));
+}
+$("exDurs").onclick = e => { const b = e.target.closest("[data-min]"); if (b) setExMinutes(+b.dataset.min || null); };
 function openExclude(freq, channel, label, name, wide) {
   exTarget = { freq, channel };
+  setExMinutes(null);
   $("exFreq").textContent = label + " MHz";
   $("exName").textContent = name || "";
   $("exNote").value = "";
@@ -758,7 +783,7 @@ function openExclude(freq, channel, label, name, wide) {
 function doExclude(wide) {
   if (!exTarget) return;
   const note = $("exNote").value.trim();
-  send({ c: "exclude", freq: exTarget.freq, channel: exTarget.channel, wide, note: note || null });
+  send({ c: "exclude", freq: exTarget.freq, channel: exTarget.channel, wide, note: note || null, minutes: exMinutes });
   closeSheet("exSheet");
 }
 $("exOne").onclick = () => doExclude(false);
@@ -804,9 +829,11 @@ $("itDelete").onclick = () => {
   confirmBox(`Delete ${t.label} from the activity log?`, "Its total time and hits are removed and the file is saved. This cannot be undone.", () => send({ c: "delete_activity", freq: t.freq }));
 };
 $("exclList").onclick = e => {
+  const k = e.target.closest("[data-keep]");
+  if (k) { const x = S.excl[+k.dataset.keep]; if (x) send({ c: "keep_exclusion", freq: x.freq }); return; }
   const b = e.target.closest("[data-del]"); if (!b) return;
   const x = S.excl[+b.dataset.del]; if (!x) return;
-  confirmBox(`Delete exclusion ${x.label}?`, "The entry is removed from the exclusion file.", () => send({ c: "remove_exclusion", freq: x.freq }));
+  confirmBox(`Delete exclusion ${x.label}?`, x.left_s == null ? "The entry is removed from the exclusion file." : "The timed exclusion ends now.", () => send({ c: "remove_exclusion", freq: x.freq }));
 };
 
 document.querySelectorAll("nav.tabs button").forEach(b => b.onclick = () => setTab(b.dataset.t));

@@ -215,8 +215,8 @@ impl UiContext {
         }
     }
 
-    /// Exclusion file entries with their notes.
-    pub(crate) fn exclusion_list(&self) -> Vec<(u64, Option<String>)> {
+    /// The exclusion list: timed entries, then the file entries with their notes.
+    pub(crate) fn exclusion_list(&self) -> Vec<crate::exclusions::Item> {
         self.exclusions
             .lock()
             .map(|l| l.clone())
@@ -339,8 +339,22 @@ pub enum EditKind {
     /// mode when the popup opened.
     Label { digi: bool, was: bool },
     /// An optional note for an exclusion (`[x]`/`[X]`); `wide` also excludes the adjacent
-    /// channels of `channel`.
-    Exclude { channel: Option<usize>, wide: bool },
+    /// channels of `channel`. `[Tab]` chooses `minutes` for a timed exclusion (`None`: saved).
+    Exclude {
+        channel: Option<usize>,
+        wide: bool,
+        minutes: Option<u32>,
+    },
+}
+
+/// The next duration of a timed exclusion after `[Tab]`: permanent, then each of
+/// `TIMED_MINUTES`, then permanent again.
+fn next_minutes(m: Option<u32>) -> Option<u32> {
+    let all = crate::exclusions::TIMED_MINUTES;
+    match m {
+        None => all.first().copied(),
+        Some(m) => all.iter().copied().skip_while(|&x| x != m).nth(1),
+    }
 }
 
 /// A text popup: the frequency, the typed text and an error, if the last save failed.
@@ -554,6 +568,7 @@ impl App {
                                 kind: EditKind::Exclude {
                                     channel: Some(h.channel),
                                     wide: c == 'X',
+                                    minutes: None,
                                 },
                                 freq: h.freq,
                                 text: String::new(),
@@ -565,6 +580,7 @@ impl App {
                             kind: EditKind::Exclude {
                                 channel: Some(l.channel),
                                 wide: c == 'X',
+                                minutes: None,
                             },
                             freq: l.freq,
                             text: String::new(),
@@ -635,6 +651,7 @@ impl App {
                                 kind: EditKind::Exclude {
                                     channel: None,
                                     wide: false,
+                                    minutes: None,
                                 },
                                 freq: r.freq,
                                 text: String::new(),
@@ -667,9 +684,16 @@ impl App {
                     KeyCode::Char('d') => {
                         let cmd = list
                             .get(self.exclusions_sel)
-                            .map(|&(f, _)| Command::RemoveExclusion(f));
+                            .map(|e| Command::RemoveExclusion(e.freq));
                         self.exclusions_sel = self.exclusions_sel.min(list.len().saturating_sub(2));
                         return cmd;
+                    }
+                    // A timed exclusion becomes permanent.
+                    KeyCode::Char('s') => {
+                        return list
+                            .get(self.exclusions_sel)
+                            .filter(|e| e.until.is_some())
+                            .map(|e| Command::KeepExclusion(e.freq));
                     }
                     _ => scroll(&mut self.exclusions_sel, list.len(), code),
                 }
@@ -738,11 +762,10 @@ impl App {
             KeyCode::Backspace => {
                 edit.text.pop();
             }
-            KeyCode::Tab => {
-                if let EditKind::Label { digi, .. } = &mut edit.kind {
-                    *digi = !*digi;
-                }
-            }
+            KeyCode::Tab => match &mut edit.kind {
+                EditKind::Label { digi, .. } => *digi = !*digi,
+                EditKind::Exclude { minutes, .. } => *minutes = next_minutes(*minutes),
+            },
             KeyCode::Char(c) if edit.text.chars().count() < LABEL_MAX && !c.is_control() => {
                 edit.text.push(c);
             }
@@ -750,13 +773,18 @@ impl App {
                 let text = edit.text.trim().to_string();
                 let freq = edit.freq;
                 match edit.kind {
-                    EditKind::Exclude { channel, wide } => {
+                    EditKind::Exclude {
+                        channel,
+                        wide,
+                        minutes,
+                    } => {
                         self.edit = None;
                         return Some(Command::Exclude {
                             freq,
                             channel,
                             wide,
                             note: (!text.is_empty()).then_some(text),
+                            minutes,
                         });
                     }
                     EditKind::Label { digi, was } => {
@@ -791,7 +819,7 @@ impl App {
         self.ctx.activity_rows(self.activity_sort)
     }
 
-    fn exclusion_list(&self) -> Vec<(u64, Option<String>)> {
+    fn exclusion_list(&self) -> Vec<crate::exclusions::Item> {
         self.ctx.exclusion_list()
     }
 }
@@ -871,8 +899,21 @@ mod tests {
             activity: Arc::new(Mutex::new(ActivityLog::default())),
             activity_path: PathBuf::from("rfscan-activity.txt"),
             exclusions: Arc::new(Mutex::new(vec![
-                (120_000_000, Some("receiver carrier".into())),
-                (136_975_000, None),
+                crate::exclusions::Item {
+                    freq: 433_625_000,
+                    note: Some("beacon".into()),
+                    until: Some(Instant::now() + Duration::from_secs(23 * 60)),
+                },
+                crate::exclusions::Item {
+                    freq: 120_000_000,
+                    note: Some("receiver carrier".into()),
+                    until: None,
+                },
+                crate::exclusions::Item {
+                    freq: 136_975_000,
+                    note: None,
+                    until: None,
+                },
             ])),
             exclusions_path: PathBuf::from("rfscan-exclude.txt"),
             muted: Arc::new(AtomicBool::new(false)),
@@ -1018,6 +1059,7 @@ mod tests {
             kind: EditKind::Exclude {
                 channel: Some(0),
                 wide: true,
+                minutes: None,
             },
             freq: 145_500_000,
             text: "interference".into(),
@@ -1027,6 +1069,17 @@ mod tests {
         println!("{note}\n");
         assert!(note.contains("exclude with adjacent channels: 145.500 MHz"));
         assert!(note.contains("note: interference") && note.contains("receiver carrier"));
+        assert!(note.contains("for: [permanent]") && note.contains("[Tab] duration"));
+        // The timed entry on top, with the minutes left.
+        assert!(note.contains("23 min") && note.contains("beacon"));
+        // `[Tab]` goes through the durations and back to permanent.
+        paused.edit_key(KeyCode::Tab);
+        assert!(render(&paused, 100, 30).contains("[10 min]"));
+        for _ in 0..3 {
+            paused.edit_key(KeyCode::Tab);
+        }
+        assert!(render(&paused, 100, 30).contains("for: [permanent]"));
+        paused.edit_key(KeyCode::Tab);
         // Enter sends the exclusion with the note; an empty note is no note.
         assert_eq!(
             paused.edit_key(KeyCode::Enter),
@@ -1034,14 +1087,24 @@ mod tests {
                 freq: 145_500_000,
                 channel: Some(0),
                 wide: true,
-                note: Some("interference".into())
+                note: Some("interference".into()),
+                minutes: Some(10),
             })
         );
+        // `[s]` keeps the timed exclusion, a file entry has nothing to keep.
+        assert_eq!(
+            paused.key(KeyCode::Char('s')),
+            Some(Command::KeepExclusion(433_625_000))
+        );
+        paused.key(KeyCode::Down);
+        assert_eq!(paused.key(KeyCode::Char('s')), None);
+        paused.key(KeyCode::Up);
         assert!(paused.edit.is_none());
         paused.edit = Some(LabelEdit {
             kind: EditKind::Exclude {
                 channel: None,
                 wide: false,
+                minutes: None,
             },
             freq: 433_375_000,
             text: "  ".into(),
@@ -1053,7 +1116,8 @@ mod tests {
                 freq: 433_375_000,
                 channel: None,
                 wide: false,
-                note: None
+                note: None,
+                minutes: None,
             })
         );
         a.apply(lock());
@@ -1270,7 +1334,8 @@ mod tests {
             edit.kind,
             EditKind::Exclude {
                 channel: Some(0),
-                wide: true
+                wide: true,
+                minutes: None,
             }
         ));
         a.edit = None;

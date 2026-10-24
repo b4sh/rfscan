@@ -31,6 +31,7 @@ use crate::audio_dsp::Sos;
 use crate::demod::Resampler;
 use crate::dsd_fme::DsdState;
 use crate::events::{Command, HistoryItem, LockView, ScanState, Spectrum, Status, UiEvent};
+use crate::exclusions::TIMED_MINUTES;
 use crate::ui::{ActivitySort, CpuMeter, UiContext};
 
 /// The page: HTML, CSS and JavaScript in one file, bundled in the program.
@@ -409,6 +410,9 @@ enum ClientMsg {
         channel: Option<usize>,
         wide: bool,
         note: Option<String>,
+        /// A timed exclusion (one of `TIMED_MINUTES`); missing or null saves it to the file.
+        #[serde(default)]
+        minutes: Option<u32>,
     },
     Label {
         freq: u64,
@@ -420,6 +424,9 @@ enum ClientMsg {
         freq: u64,
     },
     RemoveExclusion {
+        freq: u64,
+    },
+    KeepExclusion {
         freq: u64,
     },
     Activity,
@@ -477,7 +484,11 @@ fn handle(hub: &Hub, cmd: ClientMsg) -> Option<Value> {
             channel,
             wide,
             note,
+            minutes,
         } => {
+            if minutes.is_some_and(|m| !TIMED_MINUTES.contains(&m)) {
+                return Some(error_json("unknown duration of a timed exclusion"));
+            }
             // A plan channel index only when it is this frequency's channel.
             let channel = channel.filter(|&c| ctx.channel_freqs.get(c) == Some(&freq));
             let note = note.map(|n| clean_text(&n)).filter(|n| !n.is_empty());
@@ -486,6 +497,7 @@ fn handle(hub: &Hub, cmd: ClientMsg) -> Option<Value> {
                 channel,
                 wide,
                 note,
+                minutes,
             });
         }
         ClientMsg::Label { freq, name, digi } => {
@@ -526,6 +538,7 @@ fn handle(hub: &Hub, cmd: ClientMsg) -> Option<Value> {
             return Some(activity_json(&ctx));
         }
         ClientMsg::RemoveExclusion { freq } => send(Command::RemoveExclusion(freq)),
+        ClientMsg::KeepExclusion { freq } => send(Command::KeepExclusion(freq)),
         ClientMsg::Activity => return Some(activity_json(&ctx)),
     }
     None
@@ -644,6 +657,7 @@ fn hello_json(ctx: &UiContext, cfg: &WebConfig) -> Value {
         "local_audio": cfg.local_audio,
         "digi": ctx.digi.is_some(),
         "exclude_wide": cfg.exclude_wide,
+        "exclude_minutes": TIMED_MINUTES,
     })
 }
 
@@ -888,15 +902,18 @@ fn activity_json(ctx: &UiContext) -> Value {
 }
 
 fn exclusions_json(ctx: &UiContext) -> Value {
+    let now = Instant::now();
     let items: Vec<Value> = ctx
         .exclusion_list()
         .iter()
-        .map(|(f, note)| {
+        .map(|e| {
             json!({
-                "freq": f,
-                "label": ctx.freq_label(*f),
-                "name": ctx.name_near(*f),
-                "note": note,
+                "freq": e.freq,
+                "label": ctx.freq_label(e.freq),
+                "name": ctx.name_near(e.freq),
+                "note": e.note,
+                // Seconds left of a timed exclusion, null for a saved one.
+                "left_s": e.until.map(|t| t.saturating_duration_since(now).as_secs()),
             })
         })
         .collect();

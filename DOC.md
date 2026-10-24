@@ -157,7 +157,7 @@ Frequencies you do not want to stop on (interference, digital data, constant car
 433.920       # data bursts
 ```
 
-In the TUI `x` excludes the current frequency (a popup asks for an optional note), `X` also the adjacent channels (`--exclude-wide N` on each side, default 2), `u` undoes the last exclusion; the file is written at once. The `e` screen lists the exclusions and `d` removes one. `--exclude F,...` adds temporary exclusions for this run only. An exclusion applies to the frequency in every range and channel list.
+In the TUI `x` excludes the current frequency (a popup asks for an optional note), `X` also the adjacent channels (`--exclude-wide N` on each side, default 2), `u` undoes the last exclusion; the file is written at once. `Tab` in the popup makes it a timed exclusion for 10, 30 or 60 minutes instead: it is not written to the file, ends by itself and is gone after a restart. The `e` screen lists the exclusions (the timed ones first, with the minutes left), `d` removes one and `s` keeps a timed one for good (written to the file with its note). `--exclude F,...` adds temporary exclusions for this run only. An exclusion applies to the frequency in every range and channel list.
 
 ## Activity log
 
@@ -256,13 +256,13 @@ When the output is a terminal, rfscan runs with the TUI. The layout adapts to th
 | `q`, Ctrl+C | quit |
 | `p` | pause scanning |
 | space | skip the current signal once |
-| `x` / `X` | exclude the current frequency (with adjacent channels), with an optional note |
+| `x` / `X` | exclude the current frequency (with adjacent channels), with an optional note; `Tab` in the popup: for good or for 10 / 30 / 60 min |
 | `u` | undo the last exclusion |
 | `+` / `-` | squelch threshold |
 | `m` | mute |
 | `n`, `<` / `>` | noise reduction on/off, strength |
 | `a` | activity screen (`←` / `→` sort column, `s` reverse the order, `l` name a channel, `Tab` in the popup: `digi`, `x` exclude, `d` delete the entry, `c` clear) |
-| `e` | exclusions screen (`d` remove) |
+| `e` | exclusions screen (`d` remove, `s` keep a timed exclusion for good) |
 | `Tab` | select a detection history row (arrows move, `l` name the channel, `x` / `X` exclude it (with adjacent channels), `Tab` / `Esc` back) |
 
 ## Console mode and log file
@@ -289,7 +289,7 @@ rfscan --scan-range 144M-146M --web-gui 8080            # this computer only: ht
 rfscan --scan-range 144M-146M --web-gui 0.0.0.0:8080    # the home network
 ```
 
-rfscan prints the link at startup. The page shows the frequency or channel number with its name, the state, the signal level, and has buttons for pause, skip, exclude (with a note), undo, squelch, noise reduction and audio; the history and the activity log (tapping an entry names the channel, sets the `digi` mode or excludes it; an activity entry can also be deleted, and the activity log is sorted by tapping a column header) and the exclusions are separate tabs. It has a dark and a light theme. It works with the TUI or with `--headless`, and several browsers can be connected at once, each with full control.
+rfscan prints the link at startup. The page shows the frequency or channel number with its name, the state, the signal level, and has buttons for pause, skip, exclude (with a note, for good or for 10 / 30 / 60 minutes), undo, squelch, noise reduction and audio; the history and the activity log (tapping an entry names the channel, sets the `digi` mode or excludes it; an activity entry can also be deleted, and the activity log is sorted by tapping a column header) and the exclusions (a timed one shows the minutes left and can be kept for good) are separate tabs. It has a dark and a light theme. It works with the TUI or with `--headless`, and several browsers can be connected at once, each with full control.
 
 The audio is sent to the browser as 8 kHz μ-law (64 kbit/s, 300-3000 Hz) after **Audio** is tapped (browsers need a tap before playing sound); the delay is about 0.2-0.3 s more than the local audio. The local audio keeps playing: **Mute PC** mutes it (like `m` in the TUI), and `--local-audio off` turns the local output off completely (the web page still gets the audio).
 

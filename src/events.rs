@@ -114,18 +114,23 @@ pub enum Command {
     Skip,
     /// Exclude a frequency with an optional note (from the note popup after `x`/`X` on the main
     /// screen or `x` on the activity screen). `channel` is the plan channel when known; `wide`
-    /// also excludes its adjacent channels (`--exclude-wide`). If the scanner is on this
-    /// frequency, it leaves it at once.
+    /// also excludes its adjacent channels (`--exclude-wide`). `minutes`: a timed exclusion,
+    /// not saved; `None` saves it to the file. If the scanner is on this frequency, it leaves it
+    /// at once.
     Exclude {
         freq: u64,
         channel: Option<usize>,
         wide: bool,
         note: Option<String>,
+        minutes: Option<u32>,
     },
     /// Undo the last exclusion added in this session.
     UndoExclusion,
-    /// Remove an entry from the exclusion file (exclusions screen).
+    /// Remove an entry from the exclusion list (exclusions screen): a timed one, or one from the
+    /// file (saved).
     RemoveExclusion(u64),
+    /// Make a timed exclusion permanent (saved to the file with its note).
+    KeepExclusion(u64),
     /// A channel was switched to or from `digi` mode in the channel file (`[l]` on the activity
     /// screen): the nearest plan channel changes its mode at once.
     SetDigi {
