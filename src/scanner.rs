@@ -63,6 +63,11 @@ pub const EXIT_HOLD: Duration = Duration::from_millis(30);
 pub const RETURN_HOLD: Duration = EXIT_HOLD;
 /// How often to save the activity log if it changed.
 const ACTIVITY_SAVE_INTERVAL: Duration = Duration::from_secs(30);
+/// This many stream overflows within `OVERFLOW_PERIOD` mean the receiver keeps dropping
+/// samples at this sample rate: warned once per run. A single overflow (e.g. at the start) is
+/// not a reason to warn.
+const OVERFLOW_WARN: u64 = 5;
+const OVERFLOW_PERIOD: Duration = Duration::from_secs(60);
 /// How often to send the status, the mini-spectrum and the live lock measurement to the UI.
 const UI_STATUS_INTERVAL: Duration = Duration::from_millis(250);
 const UI_LIVE_INTERVAL: Duration = Duration::from_millis(100);
@@ -536,6 +541,8 @@ pub fn run(
     let mut covered_hz = 0.0;
     let mut scan_time = Duration::ZERO;
     let mut save_at = start + ACTIVITY_SAVE_INTERVAL;
+    // Overflows counted at the start of the current period; `None` after the warning.
+    let mut overflow_check: Option<(Instant, u64)> = Some((start + OVERFLOW_PERIOD, 0));
     let mut ui_status_at = start;
     let mut steps_at_status: u64 = 0;
     let mut ui_live_at = start;
@@ -1165,6 +1172,20 @@ pub fn run(
         if now >= save_at {
             save_activity(activity, activity_path);
             save_at = now + ACTIVITY_SAVE_INTERVAL;
+        }
+        if let Some((at, before)) = overflow_check
+            && now >= at
+        {
+            let dropped = counters.overflows - before;
+            overflow_check = if dropped >= OVERFLOW_WARN {
+                logwarn!(
+                    log,
+                    "WARNING: the receiver dropped samples {dropped} times in the last minute (stream overflows), so the scan misses parts of the band. Try a lower --sample-rate; see DOC.md, Receiver setup."
+                );
+                None
+            } else {
+                Some((now + OVERFLOW_PERIOD, counters.overflows))
+            };
         }
         if stop.load(Ordering::Relaxed) || cfg.duration.is_some_and(|d| now - start >= d) {
             break;

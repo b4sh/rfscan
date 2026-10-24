@@ -1392,10 +1392,13 @@ fn use_packaged_soapy() {
 
 /// Printed after an error from a failed retune: it usually means the receiver stopped
 /// responding, most often because of a too short settle or a too high sample rate.
-const TUNE_HINT: &str = "The receiver stopped responding. Check --settle and --sample-rate for your receiver; see DOC.md, Receiver setup.";
+const TUNE_HINT: &str =
+    "The receiver stopped responding. Unplug it and plug it in again: it may stay stuck until then.
+Then check --settle and --sample-rate for your receiver; see DOC.md, Receiver setup.";
 
 /// Printed after the stream stopped delivering samples: an unplugged or hung receiver.
-const NO_SAMPLES_HINT: &str = "The receiver stopped delivering samples. Check the USB connection, --settle and --sample-rate for your receiver; see DOC.md, Receiver setup.";
+const NO_SAMPLES_HINT: &str = "The receiver stopped delivering samples. Unplug it and plug it in again: it may stay stuck until then.
+Then check the USB connection, --settle and --sample-rate for your receiver; see DOC.md, Receiver setup.";
 
 fn main() -> std::process::ExitCode {
     use_packaged_soapy();
