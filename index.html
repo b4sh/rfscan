@@ -173,6 +173,16 @@ pre {
 }
 pre .c { color: var(--faint); }
 pre .p { color: var(--green); user-select: none; }
+/* a box that scrolls sideways (commands, the receivers table) fades out at the right edge while
+   more follows; --fade is the color behind its content, --fade-r its inner corner radius */
+.fade { position: relative; --fade: #070e19; --fade-r: 9px; }
+.fade.table { --fade: var(--bg); --fade-r: calc(var(--radius) - 1px); }
+.fade::after {
+  content: ""; position: absolute; top: 1px; bottom: 1px; right: 1px; width: 48px;
+  border-radius: 0 var(--fade-r) var(--fade-r) 0; pointer-events: none; opacity: 0; transition: opacity .15s;
+  background: linear-gradient(to right, transparent, var(--fade) 85%);
+}
+.fade.more::after { opacity: 1; }
 
 /* Footer */
 footer { padding: 48px 0 60px; color: var(--faint); font-size: 14px; }
@@ -520,6 +530,19 @@ footer a { color: var(--dim); }
     requestAnimationFrame(frame);
   }
 })();
+
+// Command boxes and the receivers table: the fade at the right edge shows while the box can
+// scroll further.
+document.querySelectorAll("pre, .table-wrap").forEach(el => {
+  const box = document.createElement("div");
+  box.className = el.matches(".table-wrap") ? "fade table" : "fade";
+  el.replaceWith(box);
+  box.appendChild(el);
+  const update = () => box.classList.toggle("more", el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
+  el.addEventListener("scroll", update, { passive: true });
+  addEventListener("resize", update);
+  update();
+});
 </script>
 </body>
 </html>
