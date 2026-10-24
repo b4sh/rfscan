@@ -183,17 +183,23 @@ body:not([data-tab="main"]) #main { display: none; }
 body[data-list="history"] #pane-history,
 body[data-list="activity"] #pane-activity,
 body[data-list="excl"] #pane-excl { display: block; }
-.listhead { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+/* the same header band on every list: title, count, action */
+.listhead { display: flex; align-items: center; gap: 12px; min-height: 50px; margin-bottom: 10px; padding: 8px 12px; border-radius: 6px; border-bottom: 1px solid var(--line); background: var(--card2); }
 .listhead h2 { margin: 0; font-size: 17px; }
 .listhead .stats { flex: 1; }
-.lrow { display: flex; flex-wrap: wrap; align-items: baseline; gap: 1px 8px; padding: 6px 2px; border-bottom: 1px solid var(--line); font-size: 13px; cursor: pointer; }
+.listhead .smallbtn { background: var(--card); }
+.listhead .smallbtn.warn { background: var(--danger); border-color: var(--danger); color: #fff; }
+/* list rows: the phone layout (two lines per entry, larger text); the column layout below keeps
+   its own sizes */
+.lrow { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; padding: 8px 2px; border-bottom: 1px solid var(--line); font-size: 15px; cursor: pointer; }
 .lrow:last-child { border-bottom: 0; }
 .lrow.head { display: none; }
-.lrow .f { font-size: 15px; font-weight: 700; }
+.lrow .f { font-size: 17px; font-weight: 700; }
+.lrow .mode { width: 44px; font-size: 12px; }
 .lrow .n { color: var(--name); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
 .lrow .c { color: var(--dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .lrow .c[data-l]::before { content: attr(data-l) " "; color: var(--faint); }
-.lrow .note { color: var(--hang); }
+.lrow .note { color: var(--hang); flex: 1; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .lrow .br { flex-basis: 100%; height: 0; }
 /* duration of an exclusion: permanent or timed */
 .durs { display: flex; gap: 6px; margin-bottom: 10px; }
@@ -202,11 +208,13 @@ body[data-list="excl"] #pane-excl { display: block; }
 .mode { display: inline-block; width: 38px; text-align: center; font-size: 10px; font-weight: 800; padding: 1px 0; border-radius: 3px; background: var(--card2); color: var(--dim); }
 .mode.digi { color: var(--digi); }
 .smallbtn { min-height: 32px; padding: 0 10px; border-radius: 5px; border: 1px solid var(--line); background: var(--card2); font-weight: 700; font-size: 13px; cursor: pointer; }
-/* activity sort: the headers are always shown, on a phone as a row of sort keys */
-#pane-activity .lrow.head { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 11px; font-weight: 700; color: var(--faint); text-transform: uppercase; letter-spacing: .3px; cursor: default; }
+/* activity sort: the headers are always shown, on a phone as sort keys large enough to tap */
+#pane-activity .lrow.head { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 0 10px; font-size: 13px; font-weight: 700; color: var(--faint); text-transform: uppercase; letter-spacing: .3px; cursor: default; }
+#pane-activity .lrow.head [data-sort] { padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--card2); }
+#pane-activity .lrow.head [data-sort].on { border-color: var(--accent); }
 .lrow.head [data-sort] { cursor: pointer; white-space: nowrap; }
 .lrow.head [data-sort].on { color: var(--text); }
-.lrow.head .ar { display: inline-block; width: 9px; margin-left: 2px; font-size: 9px; letter-spacing: 0; text-align: center; }
+.lrow.head .ar { display: inline-block; width: 11px; margin-left: 3px; font-size: 11px; letter-spacing: 0; text-align: center; }
 .lrow.head .on .ar { color: var(--accent); }
 
 /* bottom tab bar (phone) */
@@ -243,14 +251,18 @@ nav.tabs button.active { color: var(--accent); }
 /* lists in columns when their pane is wide enough (phone layout otherwise, no horizontal scroll) */
 #lists { container: lists / inline-size; }
 @container lists (min-width: 560px) {
-  .lrow { display: grid; gap: 10px; padding: 5px 2px; align-items: center; }
+  .lrow { display: grid; gap: 10px; padding: 5px 2px; align-items: center; font-size: 13px; }
+  .lrow .f { font-size: 15px; }
   .lrow .br { display: none; }
   .lrow .c[data-l]::before { content: none; }
   .lrow .n { flex: none; }
-  .lrow .mode { justify-self: start; }
+  .lrow .mode { justify-self: start; width: 38px; font-size: 10px; }
   .lrow.head { display: grid; font-size: 11px; font-weight: 700; color: var(--faint); text-transform: uppercase; letter-spacing: .5px; cursor: default; }
   #pane-history .lrow  { grid-template-columns: 96px 44px minmax(60px, 1fr) 70px 50px 64px 84px; }
   #pane-activity .lrow, #pane-activity .lrow.head { display: grid; gap: 10px; grid-template-columns: 96px 50px minmax(54px, 1fr) 58px 70px 48px 124px; }
+  #pane-activity .lrow.head { padding: 5px 2px; font-size: 11px; }
+  #pane-activity .lrow.head [data-sort] { padding: 0; border: 0; background: none; }
+  .lrow.head .ar { width: 9px; margin-left: 2px; font-size: 9px; }
   #pane-excl .lrow     { grid-template-columns: 96px minmax(120px, 1fr) 56px minmax(140px, 2fr); }
 }
 .conn.off { background: var(--danger); }
@@ -348,7 +360,7 @@ body.nolocal #bAudio { grid-column: 1 / -1; }
       </div>
 
       <div class="listpane" id="pane-activity">
-        <div class="listhead"><h2>Activity</h2><span class="stats"></span><button class="smallbtn" id="bClear">Clear all</button></div>
+        <div class="listhead"><h2>Activity</h2><span class="stats" id="actCount"></span><button class="smallbtn warn" id="bClear">Clear all</button></div>
         <div id="activityList"></div>
       </div>
 
@@ -723,6 +735,7 @@ function setActSort(col) {
 
 function renderActivity() {
   actView = sortActivity();
+  $("actCount").textContent = S.activity.length + " entries";
   const arrow = c => c === actSort.col ? (actSort.desc ? "▼" : "▲") : "↕";
   $("activityList").innerHTML = S.activity.length === 0 ? `<div class="empty">the activity log is empty</div>` :
     `<div class="lrow head">${ACT_COLS.map(([c, t]) => `<span data-sort="${c}"${c === actSort.col ? ' class="on"' : ""}>${t}<span class="ar">${arrow(c)}</span></span>`).join("")}</div>` +
