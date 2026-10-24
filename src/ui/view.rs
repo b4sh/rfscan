@@ -297,6 +297,12 @@ fn label_popup(f: &mut Frame, area: Rect, app: &App, edit: &super::LabelEdit) {
             "note: ",
             "[Enter] exclude (note optional) [Tab] duration [Esc] cancel",
         ),
+        super::EditKind::Note => (
+            " note: ".to_string(),
+            Color::Yellow,
+            "note: ",
+            "[Enter] save (empty removes the note)   [Esc] cancel",
+        ),
     };
     let w = 64.min(area.width.saturating_sub(4));
     let h = 7.min(area.height);
@@ -350,6 +356,7 @@ fn label_popup(f: &mut Frame, area: Rect, app: &App, edit: &super::LabelEdit) {
             }
             lines.push(Line::from(spans));
         }
+        super::EditKind::Note => {}
     }
     lines.extend([
         match &edit.error {
@@ -1258,9 +1265,19 @@ fn activity_screen(f: &mut Frame, inner: Rect, app: &App) {
     f.render_widget(Paragraph::new(keys), keys_area);
 }
 
+const EXCLUSION_KEYS: [&str; 6] = [
+    "[↑↓] scroll",
+    "[Enter] edit note",
+    "[d] delete",
+    "[s] keep a timed one",
+    "[e/Esc] back",
+    "[q] quit",
+];
+
 fn exclusions_screen(f: &mut Frame, inner: Rect, app: &App) {
     let list = app.exclusion_list();
-    let list_h = (inner.height as usize).saturating_sub(2);
+    let keys = key_lines(inner.width as usize, &EXCLUSION_KEYS, &EXCLUSION_KEYS);
+    let list_h = (inner.height as usize).saturating_sub(2 + keys.len());
     let sel = app.exclusions_sel.min(list.len().saturating_sub(1));
     let start = scroll_start(sel, list.len(), list_h);
     let timed = list.iter().filter(|e| e.until.is_some()).count();
@@ -1306,14 +1323,10 @@ fn exclusions_screen(f: &mut Frame, inner: Rect, app: &App) {
     if list.is_empty() {
         lines.push(Line::from(dim("  (no exclusions)")));
     }
-    let [body, keys] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
+    let [body, keys_area] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(keys.len() as u16)]).areas(inner);
     f.render_widget(Paragraph::new(lines), body);
-    f.render_widget(
-        Paragraph::new(key_line(
-            "[↑↓] scroll   [d] delete   [s] keep a timed one (saves it)   [e/Esc] back   [q] quit",
-        )),
-        keys,
-    );
+    f.render_widget(Paragraph::new(keys), keys_area);
 }
 
 #[cfg(test)]

@@ -35,7 +35,6 @@
   --hang: #e5bf4c;
   --pause: #b3a6e8;
   --danger: #e5584f;
-  --del-bg: #8a2f2a;
   --digi: #e17bd2;
   --radius: 8px;
   color-scheme: dark;
@@ -57,7 +56,6 @@
   --hang: #946a00;
   --pause: #65549f;
   --danger: #b8322a;
-  --del-bg: #b8443c;
   --digi: #a3338f;
   color-scheme: light;
 }
@@ -197,7 +195,6 @@ body[data-list="excl"] #pane-excl { display: block; }
 .lrow .c[data-l]::before { content: attr(data-l) " "; color: var(--faint); }
 .lrow .note { color: var(--hang); }
 .lrow .br { flex-basis: 100%; height: 0; }
-.lrow .acts { display: flex; gap: 6px; margin-left: auto; }
 /* duration of an exclusion: permanent or timed */
 .durs { display: flex; gap: 6px; margin-bottom: 10px; }
 .durs .smallbtn { flex: 1; color: var(--text); }
@@ -211,8 +208,6 @@ body[data-list="excl"] #pane-excl { display: block; }
 .lrow.head [data-sort].on { color: var(--text); }
 .lrow.head .ar { display: inline-block; width: 9px; margin-left: 2px; font-size: 9px; letter-spacing: 0; text-align: center; }
 .lrow.head .on .ar { color: var(--accent); }
-.smallbtn.keep { min-height: 26px; padding: 0 8px; font-size: 12px; color: var(--text); }
-.smallbtn.del { min-height: 26px; padding: 0 8px; font-size: 12px; background: var(--del-bg); border-color: var(--del-bg); color: #fbeceb; }
 
 /* bottom tab bar (phone) */
 nav.tabs {
@@ -256,8 +251,7 @@ nav.tabs button.active { color: var(--accent); }
   .lrow.head { display: grid; font-size: 11px; font-weight: 700; color: var(--faint); text-transform: uppercase; letter-spacing: .5px; cursor: default; }
   #pane-history .lrow  { grid-template-columns: 96px 44px minmax(60px, 1fr) 70px 50px 64px 84px; }
   #pane-activity .lrow, #pane-activity .lrow.head { display: grid; gap: 10px; grid-template-columns: 96px 50px minmax(54px, 1fr) 58px 70px 48px 124px; }
-  #pane-excl .lrow     { grid-template-columns: 96px minmax(120px, 1fr) 56px minmax(140px, 2fr) 132px; }
-  #pane-excl .acts     { justify-content: flex-end; }
+  #pane-excl .lrow     { grid-template-columns: 96px minmax(120px, 1fr) 56px minmax(140px, 2fr); }
 }
 .conn.off { background: var(--danger); }
 .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 70px; z-index: 40; max-width: 90%; background: var(--danger); color: #fff; padding: 8px 14px; border-radius: 6px; font-weight: 600; display: none; }
@@ -383,6 +377,21 @@ body.nolocal #bAudio { grid-column: 1 / -1; }
     <button class="btn danger" style="width:100%" id="exOne">✕ Exclude</button>
     <div class="row">
       <button class="btn warn" id="exWide">Exclude ±2 channels</button>
+      <button class="btn" data-close>Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- exclusion sheet: note, keep, delete -->
+<div class="backdrop" id="exclSheet">
+  <div class="sheet">
+    <h3 id="xsFreq"></h3>
+    <div class="sub" id="xsInfo"></div>
+    <input type="text" id="xsNote" maxlength="40" placeholder="Note (empty removes it)">
+    <button class="btn primary" style="width:100%" id="xsSave">Save note</button>
+    <button class="btn" style="width:100%; margin-top:8px" id="xsKeep">Keep for good (save to the file)</button>
+    <div class="row">
+      <button class="btn warn" id="xsDelete">Delete</button>
       <button class="btn" data-close>Cancel</button>
     </div>
   </div>
@@ -729,12 +738,11 @@ function exclLeft(e) {
 }
 function renderExcl() {
   $("exclList").innerHTML = S.excl.length === 0 ? `<div class="empty">no exclusions</div>` :
-    `<div class="lrow head"><span>Freq</span><span>Name</span><span>For</span><span>Note</span><span></span></div>` +
-    S.excl.map((e, i) => `<div class="lrow">
+    `<div class="lrow head"><span>Freq</span><span>Name</span><span>For</span><span>Note</span></div>` +
+    S.excl.map((e, i) => `<div class="lrow" data-x="${i}">
       <span class="f">${esc(e.label)}</span><span class="n">${esc(e.name)}</span><span class="br"></span>
       <span class="c">${e.left_s == null ? "" : "⏱ " + exclLeft(e) + " min"}</span>
-      <span class="c note">${e.note ? "# " + esc(e.note) : ""}</span>
-      <span class="acts">${e.left_s == null ? "" : `<button class="smallbtn keep" data-keep="${i}">Keep</button>`}<button class="smallbtn del" data-del="${i}">Delete</button></span></div>`).join("");
+      <span class="c note">${e.note ? "# " + esc(e.note) : ""}</span></div>`).join("");
   const timed = S.excl.filter(e => e.left_s != null).length;
   $("exclCount").textContent = S.excl.length + " entries" + (timed ? `, ${timed} timed` : "");
 }
@@ -828,11 +836,32 @@ $("itDelete").onclick = () => {
   closeSheet("itemSheet");
   confirmBox(`Delete ${t.label} from the activity log?`, "Its total time and hits are removed and the file is saved. This cannot be undone.", () => send({ c: "delete_activity", freq: t.freq }));
 };
+// The exclusion sheet edits the note, keeps a timed exclusion or deletes it.
+let xsTarget = null;
 $("exclList").onclick = e => {
-  const k = e.target.closest("[data-keep]");
-  if (k) { const x = S.excl[+k.dataset.keep]; if (x) send({ c: "keep_exclusion", freq: x.freq }); return; }
-  const b = e.target.closest("[data-del]"); if (!b) return;
-  const x = S.excl[+b.dataset.del]; if (!x) return;
+  const it = e.target.closest("[data-x]"); if (!it) return;
+  const x = S.excl[+it.dataset.x]; if (!x) return;
+  xsTarget = x;
+  const timed = x.left_s != null;
+  $("xsFreq").textContent = x.label + " MHz";
+  $("xsInfo").textContent = [x.name, timed ? `timed, ${exclLeft(x)} min left` : "saved in the exclusion file"].filter(Boolean).join(" · ");
+  $("xsNote").value = x.note || "";
+  $("xsKeep").hidden = !timed;
+  openSheet("exclSheet");
+};
+$("xsSave").onclick = () => {
+  const x = xsTarget; if (!x) return;
+  send({ c: "exclusion_note", freq: x.freq, note: $("xsNote").value.trim() || null });
+  closeSheet("exclSheet");
+};
+$("xsKeep").onclick = () => {
+  const x = xsTarget; if (!x) return;
+  send({ c: "keep_exclusion", freq: x.freq });
+  closeSheet("exclSheet");
+};
+$("xsDelete").onclick = () => {
+  const x = xsTarget; if (!x) return;
+  closeSheet("exclSheet");
   confirmBox(`Delete exclusion ${x.label}?`, x.left_s == null ? "The entry is removed from the exclusion file." : "The timed exclusion ends now.", () => send({ c: "remove_exclusion", freq: x.freq }));
 };
 

@@ -131,6 +131,12 @@ pub enum Command {
     RemoveExclusion(u64),
     /// Make a timed exclusion permanent (saved to the file with its note).
     KeepExclusion(u64),
+    /// Change the note of an exclusion (`None` removes it): saved for a file entry, in memory for
+    /// a timed one.
+    SetExclusionNote {
+        freq: u64,
+        note: Option<String>,
+    },
     /// A channel was switched to or from `digi` mode in the channel file (`[l]` on the activity
     /// screen): the nearest plan channel changes its mode at once.
     SetDigi {

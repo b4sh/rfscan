@@ -366,6 +366,13 @@ impl ExclusionCtl {
         Ok(true)
     }
 
+    /// Changes the note of an exclusion and updates the shared list.
+    fn set_note(&mut self, plan: &ScanPlan, freq: u64, note: Option<&str>) -> Result<(), String> {
+        let result = self.list.set_note(&self.path, freq, note);
+        self.rebuild(plan);
+        result
+    }
+
     /// Ends the timed exclusions due by `now`; returns their frequencies (empty when none is
     /// due, without allocating).
     fn expire(&mut self, plan: &ScanPlan, now: Instant) -> Vec<u64> {
@@ -699,6 +706,21 @@ pub fn run(
                             format_mhz(f)
                         ),
                         Ok(false) => {}
+                        Err(e) => logwarn!(log, "WARNING: {e}"),
+                    }
+                    send(UiEvent::ExclusionsChanged);
+                }
+                Command::SetExclusionNote { freq, note } => {
+                    match exclusions.set_note(plan, freq, note.as_deref()) {
+                        Ok(()) => logev!(
+                            log,
+                            Level::Info,
+                            now,
+                            "NOTE      exclusion {} MHz{}",
+                            format_mhz(freq),
+                            note.as_deref()
+                                .map_or(String::new(), |n| format!("  # {n}"))
+                        ),
                         Err(e) => logwarn!(log, "WARNING: {e}"),
                     }
                     send(UiEvent::ExclusionsChanged);

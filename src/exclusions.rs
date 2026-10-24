@@ -198,6 +198,30 @@ impl Exclusions {
         }));
     }
 
+    /// Changes the note of an exclusion (`None` removes it): a timed one in memory, a file entry
+    /// on its first line in the file (atomic rewrite, the frequency text stays). A `#` in the
+    /// note becomes a space, so the comment reads back the same.
+    pub fn set_note(&mut self, path: &Path, freq: u64, note: Option<&str>) -> Result<(), String> {
+        let note = note
+            .map(|n| n.replace('#', " ").trim().to_string())
+            .filter(|n| !n.is_empty());
+        if let Some(t) = self.timed.iter_mut().find(|t| t.freq == freq) {
+            t.note = note;
+            return Ok(());
+        }
+        let Some(i) = self.entries.iter().position(|&f| f == freq) else {
+            return Err(format!(
+                "{} MHz is not on the exclusion list",
+                crate::activity::format_mhz(freq)
+            ));
+        };
+        set_note_line(path, freq, note.as_deref())?;
+        if let Some(n) = self.notes.get_mut(i) {
+            *n = note;
+        }
+        Ok(())
+    }
+
     /// Removes timed exclusions; returns whether any was removed.
     pub fn remove_timed(&mut self, freqs: &[u64]) -> bool {
         let n = self.timed.len();
@@ -309,8 +333,54 @@ fn remove_lines(path: &Path, freqs: &[u64]) -> Result<(), String> {
             out.push_str(line);
         }
     }
+    write_atomic(path, &out)
+}
+
+/// Rewrites the comment of the first line whose entry is `freq` (`None`: no comment), keeping
+/// its frequency text and the rest of the file.
+fn set_note_line(path: &Path, freq: u64, note: Option<&str>) -> Result<(), String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("cannot read exclusion file {}: {e}", path.display()))?;
+    let mut out = String::with_capacity(text.len() + LINE_EXTRA);
+    let mut done = false;
+    for line in text.split_inclusive('\n') {
+        let body = line.trim_end_matches(['\n', '\r']);
+        let eol = &line[body.len()..];
+        let bom = if body.starts_with('\u{feff}') {
+            "\u{feff}"
+        } else {
+            ""
+        };
+        let content = body[bom.len()..].split('#').next().unwrap_or("").trim();
+        if !done && !content.is_empty() && parse_entry(content).is_ok_and(|f| f == freq) {
+            done = true;
+            out.push_str(bom);
+            match note {
+                Some(n) => out.push_str(&format!("{content:<22} # {n}")),
+                None => out.push_str(content),
+            }
+            out.push_str(eol);
+        } else {
+            out.push_str(line);
+        }
+    }
+    if !done {
+        return Err(format!(
+            "{} MHz is not in {}",
+            crate::activity::format_mhz(freq),
+            path.display()
+        ));
+    }
+    write_atomic(path, &out)
+}
+
+/// Room for a longer comment when a line is rewritten.
+const LINE_EXTRA: usize = 64;
+
+/// Writes the whole file through a temporary file and a rename.
+fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
     let tmp = path.with_extension("txt.tmp");
-    std::fs::write(&tmp, out).map_err(|e| format!("writing {}: {e}", tmp.display()))?;
+    std::fs::write(&tmp, text).map_err(|e| format!("writing {}: {e}", tmp.display()))?;
     std::fs::rename(&tmp, path).map_err(|e| format!("writing {}: {e}", path.display()))
 }
 
@@ -418,6 +488,28 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("145.5125"), "{text}");
+        // A note edit rewrites only the comment of that line; `#` in the note becomes a space.
+        ex.set_note(&path, 144_000_000, Some("receiver # carrier"))
+            .unwrap();
+        ex.set_note(&path, 146_000_000, Some("beacon")).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.starts_with("# my list\n144.000                # receiver   carrier\nbad line\n"),
+            "{text}"
+        );
+        assert!(
+            text.ends_with("146.000                # beacon\n"),
+            "{text}"
+        );
+        assert_eq!(Exclusions::load(&path).unwrap().0.notes, ex.notes);
+        ex.set_note(&path, 146_000_000, None).unwrap();
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .ends_with("\n146.000\n")
+        );
+        assert!(ex.set_note(&path, 433_000_000, Some("x")).is_err());
+        ex.set_note(&path, 144_000_000, Some("carrier")).unwrap();
         assert_eq!(ex.entries, vec![144_000_000, 145_512_500, 146_000_000]);
         assert_eq!(
             ex.notes,

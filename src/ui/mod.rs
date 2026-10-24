@@ -345,6 +345,8 @@ pub enum EditKind {
         wide: bool,
         minutes: Option<u32>,
     },
+    /// The note of an existing exclusion (`[Enter]` on the exclusions screen).
+    Note,
 }
 
 /// The next duration of a timed exclusion after `[Tab]`: permanent, then each of
@@ -681,6 +683,16 @@ impl App {
                 let list = self.exclusion_list();
                 match code {
                     KeyCode::Char('e') | KeyCode::Esc => self.screen = Screen::Main,
+                    KeyCode::Enter => {
+                        if let Some(e) = list.get(self.exclusions_sel) {
+                            self.edit = Some(LabelEdit {
+                                kind: EditKind::Note,
+                                freq: e.freq,
+                                text: e.note.clone().unwrap_or_default(),
+                                error: None,
+                            });
+                        }
+                    }
                     KeyCode::Char('d') => {
                         let cmd = list
                             .get(self.exclusions_sel)
@@ -765,6 +777,7 @@ impl App {
             KeyCode::Tab => match &mut edit.kind {
                 EditKind::Label { digi, .. } => *digi = !*digi,
                 EditKind::Exclude { minutes, .. } => *minutes = next_minutes(*minutes),
+                EditKind::Note => {}
             },
             KeyCode::Char(c) if edit.text.chars().count() < LABEL_MAX && !c.is_control() => {
                 edit.text.push(c);
@@ -785,6 +798,13 @@ impl App {
                             wide,
                             note: (!text.is_empty()).then_some(text),
                             minutes,
+                        });
+                    }
+                    EditKind::Note => {
+                        self.edit = None;
+                        return Some(Command::SetExclusionNote {
+                            freq,
+                            note: (!text.is_empty()).then_some(text),
                         });
                     }
                     EditKind::Label { digi, was } => {
@@ -1098,6 +1118,22 @@ mod tests {
         );
         paused.key(KeyCode::Down);
         assert_eq!(paused.key(KeyCode::Char('s')), None);
+        // `[Enter]` edits the note of the selected exclusion; an empty note removes it.
+        paused.key(KeyCode::Enter);
+        let edit = paused.edit.as_ref().unwrap();
+        assert!(edit.kind == EditKind::Note && edit.text == "receiver carrier");
+        let pop = render(&paused, 100, 30);
+        assert!(pop.contains("note: 120.005 MHz") && pop.contains("empty removes"));
+        for _ in 0.."receiver carrier".len() {
+            paused.edit_key(KeyCode::Backspace);
+        }
+        assert_eq!(
+            paused.edit_key(KeyCode::Enter),
+            Some(Command::SetExclusionNote {
+                freq: 120_000_000,
+                note: None,
+            })
+        );
         paused.key(KeyCode::Up);
         assert!(paused.edit.is_none());
         paused.edit = Some(LabelEdit {

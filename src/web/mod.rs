@@ -429,6 +429,10 @@ enum ClientMsg {
     KeepExclusion {
         freq: u64,
     },
+    ExclusionNote {
+        freq: u64,
+        note: Option<String>,
+    },
     Activity,
 }
 
@@ -539,6 +543,10 @@ fn handle(hub: &Hub, cmd: ClientMsg) -> Option<Value> {
         }
         ClientMsg::RemoveExclusion { freq } => send(Command::RemoveExclusion(freq)),
         ClientMsg::KeepExclusion { freq } => send(Command::KeepExclusion(freq)),
+        ClientMsg::ExclusionNote { freq, note } => {
+            let note = note.map(|n| clean_text(&n)).filter(|n| !n.is_empty());
+            send(Command::SetExclusionNote { freq, note });
+        }
         ClientMsg::Activity => return Some(activity_json(&ctx)),
     }
     None
