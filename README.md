@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="../../releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/b4sh/rfscan?label=release&color=2ea043"></a>
-  <img alt="Platforms: Windows, Linux, Raspberry Pi" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20Raspberry%20Pi-0078d4">
+  <img alt="Platforms: Windows, Linux, Raspberry Pi" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20Raspberry%20Pi-0078d4"><br>
   <img alt="Rust 2024 edition" src="https://img.shields.io/badge/Rust-2024%20edition-b7410e?logo=rust&logoColor=white">
   <img alt="SDR: SoapySDR" src="https://img.shields.io/badge/SDR-SoapySDR-6f42c1">
   <a href="LICENSE"><img alt="License: AGPL-3.0-or-later" src="https://img.shields.io/badge/license-AGPL--3.0--or--later-blue"></a>
