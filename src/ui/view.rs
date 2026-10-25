@@ -1381,15 +1381,6 @@ fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
 
-/// File size, e.g. `1.2 MB`.
-fn size(bytes: u64) -> String {
-    if bytes >= 1 << 20 {
-        format!("{:.1} MB", bytes as f64 / (1 << 20) as f64)
-    } else {
-        format!("{} kB", bytes.div_ceil(1 << 10))
-    }
-}
-
 /// The recordings: the channels, or the files of one channel.
 fn recordings_screen(f: &mut Frame, inner: Rect, app: &App) {
     let width = inner.width as usize;
@@ -1481,7 +1472,7 @@ fn recordings_screen(f: &mut Frame, inner: Rect, app: &App) {
                         if i == sel { "▶" } else { "" },
                         r.time,
                         r.seconds.map_or_else(|| "-".to_string(), h_mm_ss),
-                        size(r.bytes)
+                        super::file_size(r.bytes)
                     ),
                     i == sel,
                 ));

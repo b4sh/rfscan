@@ -1095,6 +1095,15 @@ impl App {
     }
 }
 
+/// File size: `1.2 MB`, below 1 MB in kB (`37 kB`).
+pub(crate) fn file_size(bytes: u64) -> String {
+    if bytes >= 1 << 20 {
+        format!("{:.1} MB", bytes as f64 / (1 << 20) as f64)
+    } else {
+        format!("{} kB", bytes.div_ceil(1 << 10))
+    }
+}
+
 /// A channel on the recordings screen.
 pub(crate) struct RecChannelRow {
     pub(crate) id: u64,

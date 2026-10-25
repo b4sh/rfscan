@@ -1006,7 +1006,7 @@ fn rec_files_json(ctx: &UiContext, channel: u64) -> Value {
                 "id": f.id,
                 "time": f.time,
                 "dur": f.seconds.map(|s| format_duration(Duration::from_secs_f64(s))),
-                "size": format!("{:.1} MB", f.bytes as f64 / (1 << 20) as f64),
+                "size": crate::ui::file_size(f.bytes),
                 "writing": f.writing,
             })
         })
