@@ -1701,7 +1701,7 @@ mod tests {
         a.key(KeyCode::Char('w'));
         let chans = render(&a, 100, 30);
         println!("{chans}\n");
-        assert!(chans.contains("recordings (1 channels)") && chans.contains("AMATEUR CALLING"));
+        assert!(chans.contains("recordings (1 channel)") && chans.contains("AMATEUR CALLING"));
         a.key(KeyCode::Enter);
         a.key(KeyCode::Enter);
         let files = render(&a, 100, 30);

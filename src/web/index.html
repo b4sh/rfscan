@@ -186,7 +186,11 @@ body[data-list="excl"] #pane-excl,
 body[data-list="recs"] #pane-recs { display: block; }
 /* without --record-dir there are no recordings */
 body.norec [data-l="recs"], body.norec [data-t="recs"] { display: none; }
-#pane-recs .lrow .acts { display: flex; gap: 8px; margin-left: auto; }
+/* phone: the buttons on their own line, on the left; the column layout puts them in a column */
+#pane-recs .lrow .acts { display: flex; gap: 8px; flex-basis: 100%; }
+#recTitle { flex: 1; min-width: 0; }
+#pane-recs .listhead .stats { flex: none; white-space: nowrap; }
+#recBack { flex: none; white-space: nowrap; }
 #pane-recs .lrow .acts .smallbtn { min-width: 64px; }
 #pane-recs .lrow .acts .smallbtn.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 #pane-recs .lrow.file { cursor: default; }
@@ -280,6 +284,7 @@ nav.tabs button.active { color: var(--accent); }
   #pane-excl .lrow     { grid-template-columns: 96px minmax(120px, 1fr) 56px minmax(140px, 2fr); }
   #pane-recs .lrow.chan { grid-template-columns: 96px minmax(80px, 1fr) 50px 64px 130px; }
   #pane-recs .lrow.file { grid-template-columns: 170px 64px 70px 1fr; }
+  #pane-recs .lrow .acts { flex-basis: auto; }
 }
 .conn.off { background: var(--danger); }
 .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 70px; z-index: 40; max-width: 90%; background: var(--danger); color: #fff; padding: 8px 14px; border-radius: 6px; font-weight: 600; display: none; }
@@ -471,6 +476,7 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": 
 const fmtT = s => Math.floor(s / 60) + ":" + String(Math.floor(s % 60)).padStart(2, "0");
 const modeTag = m => m ? `<span class="mode ${m === "DIGI" ? "digi" : ""}">${esc(m)}</span>` : `<span></span>`;
 const fix1 = x => (x == null ? "-" : Number(x).toFixed(1));
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 const recTag = r => `<span class="rec">${r ? "✓" : ""}</span>`;
 
 // State from rfscan: the last message of each kind.
@@ -804,7 +810,7 @@ function renderRecs() {
   $("recBack").hidden = recView === null;
   if (recView === null) {
     $("recTitle").textContent = "Recordings";
-    $("recCount").textContent = S.recs.length + " channels";
+    $("recCount").textContent = plural(S.recs.length, "channel", "channels");
     $("recList").innerHTML = S.recs.length === 0 ? `<div class="empty">no recordings</div>` :
       `<div class="lrow head chan"><span>Freq</span><span>Name</span><span>Files</span><span>Total</span><span>Last</span></div>` +
       S.recs.map(c => `<div class="lrow chan" data-rc="${c.id}">
@@ -814,7 +820,7 @@ function renderRecs() {
     return;
   }
   $("recTitle").textContent = files ? `${files.label} ${files.name || ""}` : "Recordings";
-  $("recCount").textContent = files ? files.count + " files" + (files.count > files.items.length ? `, the newest ${files.items.length} listed` : "") : "";
+  $("recCount").textContent = files ? plural(files.count, "file", "files") + (files.count > files.items.length ? `, the newest ${files.items.length} listed` : "") : "";
   $("recList").innerHTML = !files ? `<div class="empty">loading…</div>` :
     `<div class="lrow head file"><span>Time</span><span>Length</span><span>Size</span><span></span></div>` +
     files.items.map(f => `<div class="lrow file">

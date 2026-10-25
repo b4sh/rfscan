@@ -1376,6 +1376,11 @@ const REC_FILE_KEYS: [&str; 5] = [
     "[q] quit",
 ];
 
+/// `1 file`, `24 files`.
+fn plural(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
+
 /// File size, e.g. `1.2 MB`.
 fn size(bytes: u64) -> String {
     if bytes >= 1 << 20 {
@@ -1399,7 +1404,10 @@ fn recordings_screen(f: &mut Frame, inner: Rect, app: &App) {
                 .clamp(5, 40);
             lines.push(separator(
                 inner.width,
-                &format!("recordings ({} channels)", chans.len()),
+                &format!(
+                    "recordings ({})",
+                    plural(chans.len(), "channel", "channels")
+                ),
             ));
             lines.push(Line::from(dim(format!(
                 "  {:>10}  {:<name_w$}  {:>6}  {:>9}  last",
@@ -1436,12 +1444,12 @@ fn recordings_screen(f: &mut Frame, inner: Rect, app: &App) {
             lines.push(separator(
                 inner.width,
                 &format!(
-                    "recordings: {} MHz {}({} files{})",
+                    "recordings: {} MHz {}({}{})",
                     chan.as_ref().map_or("-", |c| c.label.as_str()),
                     chan.as_ref()
                         .and_then(|c| c.name.as_deref())
                         .map_or_else(String::new, |n| format!("{n} ")),
-                    chan.as_ref().map_or(0, |c| c.count),
+                    plural(chan.as_ref().map_or(0, |c| c.count), "file", "files"),
                     if chan.as_ref().is_some_and(|c| c.count > files.len()) {
                         format!(", the newest {} listed", files.len())
                     } else {
