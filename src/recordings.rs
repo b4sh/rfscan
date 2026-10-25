@@ -20,8 +20,9 @@ use std::time::Duration;
 use chrono::NaiveDateTime;
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TryRecvError};
 
+use crate::audio_dsp::Sos;
 use crate::demod::Resampler;
-use crate::web::MULAW_RATE;
+use crate::web::{ANTI_ALIAS, MULAW_RATE};
 
 /// Files listed per channel (the newest); older ones stay only on the disk.
 pub const LIST_MAX: usize = 500;
@@ -382,10 +383,12 @@ fn play(
     let bytes = std::fs::read(path).ok()?;
     let (start, len) = data_chunk(&bytes)?;
     let mut rs = Resampler::new(MULAW_RATE, rate);
+    // The resampler alone leaves the images of the 8 kHz audio above 4 kHz, which sound metallic.
+    let mut anti_image = Sos::lowpass(ANTI_ALIAS.0, ANTI_ALIAS.1, ANTI_ALIAS.2, rate);
     let mut pending: Vec<f32> = Vec::with_capacity(16);
     for &u in &bytes[start..start + len] {
         pending.clear();
-        rs.push(ulaw_decode(u), |s| pending.push(s));
+        rs.push(ulaw_decode(u), |s| pending.push(anti_image.process(s)));
         for &s in &pending {
             while ring.push(s).is_err() {
                 match rx.try_recv() {

@@ -854,7 +854,11 @@ const Play_ = {
     this.stop();
     this.id = id; renderRecs();
     try {
-      if (!this.ctx) this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+      // At 8 kHz, like the live audio, the browser resamples to the sound card with a proper filter.
+      if (!this.ctx) {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        try { this.ctx = new AC({ sampleRate: Audio_.RATE }); } catch (e) { this.ctx = new AC(); }
+      }
       await this.ctx.resume();
       const r = await fetch(`/recording/${id}${location.search}`);
       if (!r.ok) throw new Error("the file is not available");
@@ -871,7 +875,17 @@ const Play_ = {
       const buf = this.ctx.createBuffer(1, data.length, rate), ch = buf.getChannelData(0);
       for (let i = 0; i < data.length; i++) ch[i] = ULAW[data[i]];
       const src = this.ctx.createBufferSource();
-      src.buffer = buf; src.connect(this.ctx.destination);
+      // A buffer at another rate than the context is resampled without a filter: the images
+      // above 4 kHz sound metallic, so two low-pass sections remove them.
+      let out = this.ctx.destination;
+      if (this.ctx.sampleRate !== rate) {
+        for (let k = 0; k < 2; k++) {
+          const f = this.ctx.createBiquadFilter();
+          f.type = "lowpass"; f.frequency.value = rate * 0.45; f.Q.value = -3.01;
+          f.connect(out); out = f;
+        }
+      }
+      src.buffer = buf; src.connect(out);
       src.onended = () => { if (this.src === src) { this.src = null; this.id = null; renderRecs(); } };
       this.src = src; src.start();
     } catch (err) {

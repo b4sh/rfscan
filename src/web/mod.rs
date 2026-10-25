@@ -65,7 +65,7 @@ const AUDIO_FRAME: usize = 160;
 const AUDIO_BAND: (f64, f64) = (300.0, 3000.0);
 /// Anti-alias filter before 8 kHz: flat up to 3.4 kHz, at least 60 dB from 3.9 kHz (the
 /// band-pass filter alone gives only 25 dB at 4 kHz, and the aliases sound metallic).
-const ANTI_ALIAS: (f64, f64, f64) = (3400.0, 3900.0, 60.0);
+pub(crate) const ANTI_ALIAS: (f64, f64, f64) = (3400.0, 3900.0, 60.0);
 /// Messages queued per browser; a slower browser skips the oldest ones.
 const BROADCAST_QUEUE: usize = 256;
 /// How many finished activities the history keeps (as in the TUI).
