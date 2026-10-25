@@ -18,7 +18,7 @@ const H_OTHER: &str = "Other";
 #[derive(Parser, Debug)]
 #[command(
     name = "rfscan",
-    version,
+    version = env!("RFSCAN_VERSION"),
     about = "Fast radio scanner (SoapySDR)",
     disable_help_flag = true,
     disable_version_flag = true

@@ -656,7 +656,7 @@ fn snapshot_messages(hub: &Hub) -> Vec<String> {
 fn hello_json(ctx: &UiContext, cfg: &WebConfig) -> Value {
     json!({
         "t": "hello",
-        "version": env!("CARGO_PKG_VERSION"),
+        "version": env!("RFSCAN_VERSION"),
         "source": env!("CARGO_PKG_REPOSITORY"),
         "device": ctx.device,
         "rate": format!("{} MSps", ctx.sample_rate / 1e6),

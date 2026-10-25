@@ -320,7 +320,7 @@ fn generate() -> String {
 # Options given multiple times are lists: scan-range = [\"144M-146M\", \"430M-440M:25k\"]
 # Switches: true or false.
 ",
-        env!("CARGO_PKG_VERSION")
+        env!("RFSCAN_VERSION")
     );
     let mut heading = None;
     for arg in cmd.get_arguments() {
