@@ -143,6 +143,8 @@ pub enum Command {
         freq: u64,
         digi: bool,
     },
+    /// A recording was deleted (from the TUI or the web GUI): the scanner logs it.
+    RecordingDeleted(std::path::PathBuf),
     /// Change the entry threshold by this many dB.
     Squelch(f32),
 }

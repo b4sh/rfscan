@@ -335,8 +335,9 @@ impl UiContext {
             .collect()
     }
 
-    /// Deletes a recording (stops it first when it is playing).
-    pub(crate) fn delete_recording(&self, id: u64) -> Result<(), String> {
+    /// Deletes a recording (stops it first when it is playing). Returns the path of the deleted
+    /// file.
+    pub(crate) fn delete_recording(&self, id: u64) -> Result<PathBuf, String> {
         if let Some(p) = &self.player
             && p.playing() == Some(id)
         {
@@ -672,7 +673,9 @@ fn event_loop(
                 continue;
             }
             if app.confirm.is_some() && !ctrl_c {
-                app.confirm_key(key.code);
+                if let Some(cmd) = app.confirm_key(key.code) {
+                    let _ = commands.send(cmd);
+                }
                 continue;
             }
             if ctrl_c || key.code == KeyCode::Char('q') {
@@ -970,18 +973,22 @@ impl App {
         }
     }
 
-    /// A key in the confirmation: `y` clears the activity log or deletes the entry and saves
-    /// the file, `n` or Esc cancels.
-    fn confirm_key(&mut self, code: KeyCode) {
-        let Some((action, _)) = self.confirm else {
-            return;
-        };
+    /// A key in the confirmation: `y` clears the activity log, deletes the entry and saves the
+    /// file, or deletes a recording; `n` or Esc cancels. Returns a command for the scanner (a
+    /// deleted recording is logged), if any.
+    fn confirm_key(&mut self, code: KeyCode) -> Option<Command> {
+        let (action, _) = self.confirm.clone()?;
+        let mut cmd = None;
         match code {
             KeyCode::Char('y') | KeyCode::Char('Y') => {
                 let result = match action {
                     ConfirmAction::Clear => self.ctx.clear_activity(),
                     ConfirmAction::Delete(freq) => self.ctx.delete_activity(freq),
-                    ConfirmAction::DeleteRecording(id) => self.ctx.delete_recording(id),
+                    ConfirmAction::DeleteRecording(id) => {
+                        self.ctx.delete_recording(id).map(|path| {
+                            cmd = Some(Command::RecordingDeleted(path));
+                        })
+                    }
                 };
                 match result {
                     Ok(()) => {
@@ -1006,6 +1013,7 @@ impl App {
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => self.confirm = None,
             _ => {}
         }
+        cmd
     }
 
     /// A key in the text popup: typing, Backspace, Enter saves (a label) or excludes (with the
@@ -1702,7 +1710,10 @@ mod tests {
         // The message is closed by the event loop on `[Esc]`.
         a.message = None;
         a.key(KeyCode::Char('d'));
-        a.confirm_key(KeyCode::Char('y'));
+        assert_eq!(
+            a.confirm_key(KeyCode::Char('y')),
+            Some(Command::RecordingDeleted(file.clone()))
+        );
         assert!(a.confirm.is_none() && a.rec_channel.is_none());
         assert!(!file.exists() && !root.join("145.500-Calling").exists());
         std::fs::remove_dir_all(&root).unwrap();

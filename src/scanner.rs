@@ -588,6 +588,9 @@ pub fn run(
                         if paused { "PAUSED" } else { "RESUMED" }
                     );
                 }
+                Command::RecordingDeleted(path) => {
+                    logev!(log, Level::Info, now, "REC DEL   {}", path.display());
+                }
                 Command::Squelch(delta) => {
                     cfg.squelch_snr = (cfg.squelch_snr + delta).max(0.0);
                     logev!(

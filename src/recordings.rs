@@ -220,8 +220,8 @@ impl Library {
     }
 
     /// Deletes a listed file (not the one being recorded) and its subdirectory when it became
-    /// empty.
-    pub fn delete(&mut self, id: u64) -> Result<(), String> {
+    /// empty. Returns the path of the deleted file.
+    pub fn delete(&mut self, id: u64) -> Result<PathBuf, String> {
         let Some((ci, fi)) = self
             .channels
             .iter()
@@ -251,7 +251,7 @@ impl Library {
         if ch.files.is_empty() {
             self.channels.remove(ci);
         }
-        Ok(())
+        Ok(path)
     }
 }
 

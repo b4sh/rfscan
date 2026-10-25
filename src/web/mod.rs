@@ -605,12 +605,13 @@ fn handle(hub: &Hub, cmd: ClientMsg) -> Option<Value> {
         ClientMsg::Activity => return Some(activity_json(&ctx)),
         ClientMsg::Recordings => return Some(recordings_json(&ctx)),
         ClientMsg::RecFiles { channel } => return Some(rec_files_json(&ctx, channel)),
-        ClientMsg::RecDelete { id, channel } => {
-            if let Err(e) = ctx.delete_recording(id) {
-                return Some(error_json(&e));
+        ClientMsg::RecDelete { id, channel } => match ctx.delete_recording(id) {
+            Ok(path) => {
+                send(Command::RecordingDeleted(path));
+                return Some(rec_files_json(&ctx, channel));
             }
-            return Some(rec_files_json(&ctx, channel));
-        }
+            Err(e) => return Some(error_json(&e)),
+        },
     }
     None
 }
