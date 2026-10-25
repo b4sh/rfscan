@@ -21,6 +21,7 @@ mod paths;
 mod plan;
 mod record;
 mod recorder;
+mod recordings;
 mod scanner;
 mod ui;
 mod web;
@@ -836,6 +837,7 @@ fn run_scan(cli: &Cli, src: &mut SoapySource, rate: f64, log: &mut Log) -> anyho
         voice: voice_tx,
         web: web_audio,
         rec: rec_tap,
+        playback: playback_tx,
     } = audio::AudioOut::open(
         cli.audio_device.as_deref(),
         cli.local_audio,
@@ -853,6 +855,18 @@ fn run_scan(cli: &Cli, src: &mut SoapySource, rate: f64, log: &mut Log) -> anyho
             .map(|(entries, _)| entries.iter().filter(|e| e.rec).map(|e| e.freq).collect())
             .unwrap_or_default(),
     ));
+    // The list of recordings (read once) and their playback on the local output.
+    let library = cli
+        .record_dir
+        .as_deref()
+        .map(|d| Arc::new(Mutex::new(recordings::Library::scan(d))));
+    let player = match playback_tx {
+        Some(ring) => Some(Arc::new(
+            recordings::Player::start(ring, out.playback_active.clone(), out.rate)
+                .map_err(anyhow::Error::msg)?,
+        )),
+        None => None,
+    };
     let rec = match (&cli.record_dir, rec_tap) {
         (Some(dir), Some(tap)) => {
             let r = recorder::start(
@@ -861,6 +875,7 @@ fn run_scan(cli: &Cli, src: &mut SoapySource, rate: f64, log: &mut Log) -> anyho
                     rate: out.rate,
                     channels_path: channels_path.clone(),
                     disk_limit: recorder::DISK_LIMIT,
+                    library: library.clone(),
                 },
                 tap,
                 rec_list.clone(),
@@ -1132,6 +1147,8 @@ fn run_scan(cli: &Cli, src: &mut SoapySource, rate: f64, log: &mut Log) -> anyho
             voice: voice.as_ref().map(|v| v.stats.clone()),
             rec_list: rec_list.clone(),
             recorder: rec.as_ref().map(|r| r.shared.clone()),
+            recordings: library.clone(),
+            player: player.clone(),
         }
     });
     let mut ui_link = None;

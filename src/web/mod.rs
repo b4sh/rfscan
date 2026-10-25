@@ -221,6 +221,7 @@ async fn serve(
         .route("/", get(index))
         .route("/manifest.json", get(manifest))
         .route("/icons/{name}", get(icon))
+        .route("/recording/{id}", get(recording))
         .route("/ws", get(ws))
         .with_state((hub, stop_rx.clone()));
     let mut stop = stop_rx;
@@ -325,6 +326,35 @@ async fn icon(axum::extract::Path(name): axum::extract::Path<String>) -> Respons
         )
             .into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// A recording (`--record-dir`) for playback in the browser, by its id from the list.
+async fn recording(
+    State((hub, _)): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<u64>,
+    Query(q): Query<TokenQuery>,
+) -> Response {
+    if !hub.authorized(&q) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let path = hub.ctx.lock().ok().and_then(|ctx| {
+        let lib = ctx.recordings.as_ref()?.lock().ok()?;
+        lib.file(id).map(|f| f.path.clone())
+    });
+    let Some(path) = path else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match tokio::task::spawn_blocking(move || std::fs::read(path)).await {
+        Ok(Ok(data)) => (
+            [
+                (header::CONTENT_TYPE, "audio/wav"),
+                (header::CACHE_CONTROL, "no-store"),
+            ],
+            data,
+        )
+            .into_response(),
+        _ => StatusCode::NOT_FOUND.into_response(),
     }
 }
 
@@ -439,6 +469,17 @@ enum ClientMsg {
         note: Option<String>,
     },
     Activity,
+    /// The channels with recordings.
+    Recordings,
+    /// The files of one channel.
+    RecFiles {
+        channel: u64,
+    },
+    /// Delete a recording; the reply is the files of its channel.
+    RecDelete {
+        id: u64,
+        channel: u64,
+    },
 }
 
 /// Typed text: trimmed, without control characters, at most `TEXT_MAX` characters.
@@ -562,6 +603,14 @@ fn handle(hub: &Hub, cmd: ClientMsg) -> Option<Value> {
             send(Command::SetExclusionNote { freq, note });
         }
         ClientMsg::Activity => return Some(activity_json(&ctx)),
+        ClientMsg::Recordings => return Some(recordings_json(&ctx)),
+        ClientMsg::RecFiles { channel } => return Some(rec_files_json(&ctx, channel)),
+        ClientMsg::RecDelete { id, channel } => {
+            if let Err(e) = ctx.delete_recording(id) {
+                return Some(error_json(&e));
+            }
+            return Some(rec_files_json(&ctx, channel));
+        }
     }
     None
 }
@@ -928,6 +977,49 @@ fn activity_json(ctx: &UiContext) -> Value {
     json!({ "t": "activity", "items": items })
 }
 
+fn recordings_json(ctx: &UiContext) -> Value {
+    let items: Vec<Value> = ctx
+        .rec_channels()
+        .iter()
+        .map(|c| {
+            json!({
+                "id": c.id,
+                "label": c.label,
+                "name": c.name,
+                "count": c.count,
+                "total": format_duration(Duration::from_secs_f64(c.total)),
+                "last": c.last,
+            })
+        })
+        .collect();
+    json!({ "t": "recordings", "items": items })
+}
+
+fn rec_files_json(ctx: &UiContext, channel: u64) -> Value {
+    let chan = ctx.rec_channels().into_iter().find(|c| c.id == channel);
+    let items: Vec<Value> = ctx
+        .rec_files(channel)
+        .iter()
+        .map(|f| {
+            json!({
+                "id": f.id,
+                "time": f.time,
+                "dur": f.seconds.map(|s| format_duration(Duration::from_secs_f64(s))),
+                "size": format!("{:.1} MB", f.bytes as f64 / (1 << 20) as f64),
+                "writing": f.writing,
+            })
+        })
+        .collect();
+    json!({
+        "t": "rec_files",
+        "channel": channel,
+        "label": chan.as_ref().map(|c| c.label.clone()),
+        "name": chan.as_ref().and_then(|c| c.name.clone()),
+        "count": chan.as_ref().map_or(0, |c| c.count),
+        "items": items,
+    })
+}
+
 fn exclusions_json(ctx: &UiContext) -> Value {
     let now = Instant::now();
     let items: Vec<Value> = ctx
@@ -1009,7 +1101,7 @@ impl MulawEncoder {
 }
 
 /// G.711 μ-law encoding of a sample in ±1.
-fn mulaw(x: f32) -> u8 {
+pub(crate) fn mulaw(x: f32) -> u8 {
     const BIAS: i32 = 0x84;
     const CLIP: i32 = 32635;
     let s = (x.clamp(-1.0, 1.0) * 32767.0) as i32;
@@ -1140,6 +1232,10 @@ mod tests {
                 freq: 145_550_000,
                 on: true
             }
+        ));
+        assert!(matches!(
+            serde_json::from_str::<ClientMsg>(r#"{"c":"rec_delete","id":7,"channel":3}"#).unwrap(),
+            ClientMsg::RecDelete { id: 7, channel: 3 }
         ));
         assert_eq!(clean_text("  a\u{7}b  "), "ab");
     }

@@ -93,6 +93,10 @@ pub struct UiContext {
     pub rec_list: crate::recorder::RecList,
     /// Audio recording (`--record-dir`), `None` without it.
     pub recorder: Option<Arc<crate::recorder::Shared>>,
+    /// The list of recordings (`--record-dir`), `None` without it.
+    pub recordings: Option<crate::recordings::SharedLibrary>,
+    /// Playback of recordings on the local output (TUI); `None` without a local output.
+    pub player: Option<Arc<crate::recordings::Player>>,
 }
 
 impl UiContext {
@@ -273,6 +277,80 @@ impl UiContext {
         }
     }
 
+    /// The channels with recordings, the most recent first (an empty list without
+    /// `--record-dir`).
+    pub(crate) fn rec_channels(&self) -> Vec<RecChannelRow> {
+        let Some(lib) = &self.recordings else {
+            return Vec::new();
+        };
+        let Ok(lib) = lib.lock() else {
+            return Vec::new();
+        };
+        lib.channels()
+            .iter()
+            .map(|c| RecChannelRow {
+                id: c.id,
+                label: c.freq.map_or_else(
+                    || "-".to_string(),
+                    |f| crate::airband::display(f, c.raster25 || self.is_raster25(f)),
+                ),
+                name: c
+                    .freq
+                    .and_then(|f| self.name_near(f).map(str::to_string))
+                    .or_else(|| c.dir_label()),
+                count: c.files.len(),
+                total: c.total_seconds(),
+                last: c
+                    .last()
+                    .map_or_else(String::new, |t| t.format("%Y-%m-%d %H:%M").to_string()),
+            })
+            .collect()
+    }
+
+    /// The listed files of a channel (at most `recordings::LIST_MAX`, the newest first).
+    pub(crate) fn rec_files(&self, channel: u64) -> Vec<RecFileRow> {
+        let Some(lib) = &self.recordings else {
+            return Vec::new();
+        };
+        let Ok(lib) = lib.lock() else {
+            return Vec::new();
+        };
+        lib.files(channel)
+            .iter()
+            .map(|f| RecFileRow {
+                id: f.id,
+                path: f.path.clone(),
+                time: f.at.map_or_else(
+                    || {
+                        f.path
+                            .file_name()
+                            .map_or_else(String::new, |n| n.to_string_lossy().into_owned())
+                    },
+                    |t| t.format("%Y-%m-%d %H:%M:%S").to_string(),
+                ),
+                seconds: f.seconds,
+                bytes: f.bytes,
+                writing: lib.writing.as_deref() == Some(f.path.as_path()),
+            })
+            .collect()
+    }
+
+    /// Deletes a recording (stops it first when it is playing).
+    pub(crate) fn delete_recording(&self, id: u64) -> Result<(), String> {
+        if let Some(p) = &self.player
+            && p.playing() == Some(id)
+        {
+            p.stop();
+        }
+        match &self.recordings {
+            Some(lib) => lib
+                .lock()
+                .map_err(|_| "the recordings are not available".to_string())?
+                .delete(id),
+            None => Err("recording needs --record-dir".into()),
+        }
+    }
+
     /// The exclusion list: timed entries, then the file entries with their notes.
     pub(crate) fn exclusion_list(&self) -> Vec<crate::exclusions::Item> {
         self.exclusions
@@ -382,6 +460,8 @@ pub(crate) enum ConfirmAction {
     Clear,
     /// `[d] delete`: remove this frequency from the activity log.
     Delete(u64),
+    /// `[d] delete` on the recordings screen: delete this file.
+    DeleteRecording(u64),
 }
 
 /// Matching tolerance of channel file names on the activity and exclusions screens.
@@ -430,6 +510,7 @@ enum Screen {
     Main,
     Activity,
     Exclusions,
+    Recordings,
 }
 
 /// Linux thermal zone of the processor (millidegrees Celsius); missing on Windows and on
@@ -506,6 +587,13 @@ struct App {
     confirm: Option<(ConfirmAction, Option<String>)>,
     /// A message shown for a few seconds instead of the key help (e.g. why `[r]` did nothing).
     notice: Option<(String, Instant)>,
+    /// A message in a popup until `[Esc]` (e.g. no local audio output for playback).
+    message: Option<String>,
+    /// Recordings screen: the selected channel, the channel whose files are listed and the
+    /// selected file.
+    rec_sel: usize,
+    rec_channel: Option<u64>,
+    rec_file_sel: usize,
 }
 
 /// Runs the TUI until the scanner finishes (the event channel closes).
@@ -532,6 +620,10 @@ pub fn run(
         edit: None,
         confirm: None,
         notice: None,
+        message: None,
+        rec_sel: 0,
+        rec_channel: None,
+        rec_file_sel: 0,
     };
     let result = event_loop(&mut terminal, &mut app, &events, &commands);
     ratatui::restore();
@@ -569,6 +661,13 @@ fn event_loop(
             if app.edit.is_some() && !ctrl_c {
                 if let Some(cmd) = app.edit_key(key.code) {
                     let _ = commands.send(cmd);
+                }
+                continue;
+            }
+            // A message takes all keys (except Ctrl+C) until `[Esc]`.
+            if app.message.is_some() && !ctrl_c {
+                if key.code == KeyCode::Esc {
+                    app.message = None;
                 }
                 continue;
             }
@@ -679,6 +778,11 @@ impl App {
                     self.screen = Screen::Exclusions;
                     None
                 }
+                KeyCode::Char('w') if self.ctx.recordings.is_some() => {
+                    self.screen = Screen::Recordings;
+                    self.rec_channel = None;
+                    None
+                }
                 // The history selection: `[l]` names the selected channel.
                 KeyCode::Tab => {
                     self.history_sel = match self.history_sel {
@@ -787,6 +891,51 @@ impl App {
                 }
                 None
             }
+            Screen::Recordings => {
+                match self.rec_channel {
+                    None => {
+                        let chans = self.ctx.rec_channels();
+                        match code {
+                            KeyCode::Char('w') | KeyCode::Esc => self.screen = Screen::Main,
+                            KeyCode::Enter => {
+                                if let Some(c) = chans.get(self.rec_sel) {
+                                    self.rec_channel = Some(c.id);
+                                    self.rec_file_sel = 0;
+                                }
+                            }
+                            _ => scroll(&mut self.rec_sel, chans.len(), code),
+                        }
+                    }
+                    Some(ch) => {
+                        let files = self.ctx.rec_files(ch);
+                        match code {
+                            KeyCode::Esc => self.rec_channel = None,
+                            KeyCode::Enter => {
+                                if let Some(f) = files.get(self.rec_file_sel) {
+                                    self.play(f.id, f.path.clone());
+                                }
+                            }
+                            KeyCode::Char('d') => {
+                                if let Some(f) = files.get(self.rec_file_sel) {
+                                    self.confirm =
+                                        Some((ConfirmAction::DeleteRecording(f.id), None));
+                                }
+                            }
+                            _ => scroll(&mut self.rec_file_sel, files.len(), code),
+                        }
+                    }
+                }
+                None
+            }
+        }
+    }
+
+    /// Plays a recording on the local output, or stops it when it is playing.
+    fn play(&mut self, id: u64, path: PathBuf) {
+        match &self.ctx.player {
+            None => self.message = Some("Audio output disabled".into()),
+            Some(p) if p.playing() == Some(id) => p.stop(),
+            Some(p) => p.play(id, path),
         }
     }
 
@@ -832,12 +981,23 @@ impl App {
                 let result = match action {
                     ConfirmAction::Clear => self.ctx.clear_activity(),
                     ConfirmAction::Delete(freq) => self.ctx.delete_activity(freq),
+                    ConfirmAction::DeleteRecording(id) => self.ctx.delete_recording(id),
                 };
                 match result {
                     Ok(()) => {
                         self.confirm = None;
                         if action == ConfirmAction::Clear {
                             self.activity_sel = 0;
+                        }
+                        // Back to the channels when the last file of the channel went.
+                        if let (ConfirmAction::DeleteRecording(_), Some(ch)) =
+                            (action, self.rec_channel)
+                        {
+                            let n = self.ctx.rec_files(ch).len();
+                            if n == 0 {
+                                self.rec_channel = None;
+                            }
+                            self.rec_file_sel = self.rec_file_sel.min(n.saturating_sub(1));
                         }
                     }
                     Err(e) => self.confirm = Some((action, Some(e))),
@@ -925,6 +1085,27 @@ impl App {
     fn exclusion_list(&self) -> Vec<crate::exclusions::Item> {
         self.ctx.exclusion_list()
     }
+}
+
+/// A channel on the recordings screen.
+pub(crate) struct RecChannelRow {
+    pub(crate) id: u64,
+    pub(crate) label: String,
+    pub(crate) name: Option<String>,
+    pub(crate) count: usize,
+    pub(crate) total: f64,
+    pub(crate) last: String,
+}
+
+/// A file on the recordings screen.
+pub(crate) struct RecFileRow {
+    pub(crate) id: u64,
+    pub(crate) path: PathBuf,
+    pub(crate) time: String,
+    pub(crate) seconds: Option<f64>,
+    pub(crate) bytes: u64,
+    /// Being recorded now.
+    pub(crate) writing: bool,
 }
 
 pub(crate) struct ActivityRow {
@@ -1031,6 +1212,8 @@ mod tests {
             voice: None,
             rec_list: Arc::new(Mutex::new(vec![433_375_000])),
             recorder: None,
+            recordings: None,
+            player: None,
         };
         let mut a = App {
             ctx,
@@ -1052,6 +1235,10 @@ mod tests {
             edit: None,
             confirm: None,
             notice: None,
+            message: None,
+            rec_sel: 0,
+            rec_channel: None,
+            rec_file_sel: 0,
         };
         a.apply(UiEvent::Status(Status {
             state: ScanState::Scanning,
@@ -1484,5 +1671,40 @@ mod tests {
         println!("{screen}\n");
         assert!(screen.contains("recording needs --record-dir"));
         assert!(a.ctx.rec_near(433_375_000));
+    }
+
+    /// The recordings screen: the channels, the files of one, no local output for playback,
+    /// deleting after the confirmation.
+    #[test]
+    fn recordings_screen() {
+        let root =
+            std::env::temp_dir().join(format!("rfscan-ui-recordings-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("145.500-Calling")).unwrap();
+        let file = root.join("145.500-Calling/20261025-120000.wav");
+        std::fs::write(&file, b"RIFF").unwrap();
+        let mut a = app();
+        a.key(KeyCode::Char('w'));
+        assert!(a.screen == Screen::Main);
+        a.ctx.recordings = Some(Arc::new(Mutex::new(crate::recordings::Library::scan(
+            &root,
+        ))));
+        assert!(render(&a, 100, 30).contains("[w] rec"));
+        a.key(KeyCode::Char('w'));
+        let chans = render(&a, 100, 30);
+        println!("{chans}\n");
+        assert!(chans.contains("recordings (1 channels)") && chans.contains("AMATEUR CALLING"));
+        a.key(KeyCode::Enter);
+        a.key(KeyCode::Enter);
+        let files = render(&a, 100, 30);
+        println!("{files}\n");
+        assert!(files.contains("2026-10-25 12:00:00") && files.contains("Audio output disabled"));
+        // The message is closed by the event loop on `[Esc]`.
+        a.message = None;
+        a.key(KeyCode::Char('d'));
+        a.confirm_key(KeyCode::Char('y'));
+        assert!(a.confirm.is_none() && a.rec_channel.is_none());
+        assert!(!file.exists() && !root.join("145.500-Calling").exists());
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

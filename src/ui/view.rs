@@ -173,6 +173,15 @@ pub fn draw(f: &mut Frame, app: &App) {
                 .add_modifier(Modifier::BOLD),
         ));
     }
+    if ctx.player.as_ref().is_some_and(|p| p.playing().is_some()) {
+        right.push(Span::styled(
+            " ▶ PLAY ",
+            Style::new()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
     if ctx.rec_writing() {
         right.push(Span::styled(
             " REC ",
@@ -213,6 +222,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         Screen::Main => main_screen(f, inner, app),
         Screen::Activity => activity_screen(f, inner, app),
         Screen::Exclusions => exclusions_screen(f, inner, app),
+        Screen::Recordings => recordings_screen(f, inner, app),
     }
     if let Some(edit) = &app.edit {
         label_popup(f, area, app, edit);
@@ -220,6 +230,27 @@ pub fn draw(f: &mut Frame, app: &App) {
     if let Some((action, error)) = &app.confirm {
         confirm_popup(f, area, app, *action, error.as_deref());
     }
+    if let Some(msg) = &app.message {
+        message_popup(f, area, msg);
+    }
+}
+
+/// A message until `[Esc]`.
+fn message_popup(f: &mut Frame, area: Rect, msg: &str) {
+    let rect = centered(area, 50, 6);
+    let block = Block::bordered()
+        .border_style(Style::new().fg(Color::Yellow))
+        .padding(ratatui::widgets::Padding::horizontal(1));
+    let inner = block.inner(rect);
+    f.render_widget(ratatui::widgets::Clear, rect);
+    f.render_widget(block, rect);
+    let lines = vec![
+        Line::from(""),
+        Line::from(text(fit(msg, inner.width as usize))).centered(),
+        Line::from(""),
+        key_line("[Esc] close").centered(),
+    ];
+    f.render_widget(Paragraph::new(lines), inner);
 }
 
 /// A rectangle of `w` x `h` centered in `area`.
@@ -248,6 +279,17 @@ fn confirm_popup(
             " clear the activity log ".to_string(),
             "All entries will be removed and the empty file saved.".to_string(),
         ),
+        super::ConfirmAction::DeleteRecording(id) => {
+            let name = app
+                .rec_channel
+                .map(|ch| app.ctx.rec_files(ch))
+                .and_then(|files| files.into_iter().find(|f| f.id == id))
+                .map_or_else(String::new, |f| f.time);
+            (
+                format!(" delete the recording {name} "),
+                "The file will be deleted from the disk.".to_string(),
+            )
+        }
         super::ConfirmAction::Delete(freq) => {
             let name = app
                 .ctx
@@ -489,6 +531,18 @@ fn main_screen(f: &mut Frame, inner: Rect, app: &App) {
     let wide = inner.width + 4 >= BIG_W;
     let keys = if app.history_sel.is_some() {
         key_lines(width, &HISTORY_KEYS, &HISTORY_KEYS)
+    } else if app.ctx.recordings.is_some() {
+        // `[w] recordings` before `[Tab] history`.
+        let with = |keys: &[&'static str], w: &'static str| {
+            let mut v = keys.to_vec();
+            v.insert(v.len() - 1, w);
+            v
+        };
+        key_lines(
+            width,
+            &with(&MAIN_KEYS, "[w] recordings"),
+            &with(&MAIN_KEYS_SHORT, "[w] recs"),
+        )
     } else {
         key_lines(width, &MAIN_KEYS, &MAIN_KEYS_SHORT)
     };
@@ -1310,6 +1364,129 @@ fn activity_screen(f: &mut Frame, inner: Rect, app: &App) {
     let [list, keys_area] =
         Layout::vertical([Constraint::Min(0), Constraint::Length(keys.len() as u16)]).areas(inner);
     f.render_widget(Paragraph::new(lines), list);
+    f.render_widget(Paragraph::new(keys), keys_area);
+}
+
+const REC_CHANNEL_KEYS: [&str; 4] = ["[↑↓] scroll", "[Enter] files", "[w/Esc] back", "[q] quit"];
+const REC_FILE_KEYS: [&str; 5] = [
+    "[↑↓] scroll",
+    "[Enter] play / stop",
+    "[d] delete",
+    "[Esc] channels",
+    "[q] quit",
+];
+
+/// File size, e.g. `1.2 MB`.
+fn size(bytes: u64) -> String {
+    if bytes >= 1 << 20 {
+        format!("{:.1} MB", bytes as f64 / (1 << 20) as f64)
+    } else {
+        format!("{} kB", bytes.div_ceil(1 << 10))
+    }
+}
+
+/// The recordings: the channels, or the files of one channel.
+fn recordings_screen(f: &mut Frame, inner: Rect, app: &App) {
+    let width = inner.width as usize;
+    let mut lines = Vec::new();
+    let (keys, list_len) = match app.rec_channel {
+        None => {
+            let chans = app.ctx.rec_channels();
+            let keys = key_lines(width, &REC_CHANNEL_KEYS, &REC_CHANNEL_KEYS);
+            let list_h = (inner.height as usize).saturating_sub(2 + keys.len());
+            let name_w = width
+                .saturating_sub(2 + 10 + 2 + 2 + 6 + 2 + 9 + 2 + 16)
+                .clamp(5, 40);
+            lines.push(separator(
+                inner.width,
+                &format!("recordings ({} channels)", chans.len()),
+            ));
+            lines.push(Line::from(dim(format!(
+                "  {:>10}  {:<name_w$}  {:>6}  {:>9}  last",
+                "MHz", "name", "files", "total"
+            ))));
+            let sel = app.rec_sel.min(chans.len().saturating_sub(1));
+            for (i, c) in chans
+                .iter()
+                .enumerate()
+                .skip(scroll_start(sel, chans.len(), list_h))
+                .take(list_h)
+            {
+                lines.push(selected(
+                    format!(
+                        "{:<2}{:>10}  {:<name_w$}  {:>6}  {:>9}  {}",
+                        if i == sel { "▶" } else { "" },
+                        c.label,
+                        fit(c.name.as_deref().unwrap_or(""), name_w),
+                        c.count,
+                        h_mm_ss(c.total),
+                        c.last
+                    ),
+                    i == sel,
+                ));
+            }
+            (keys, chans.len())
+        }
+        Some(ch) => {
+            let files = app.ctx.rec_files(ch);
+            let keys = key_lines(width, &REC_FILE_KEYS, &REC_FILE_KEYS);
+            let list_h = (inner.height as usize).saturating_sub(2 + keys.len());
+            let chan = app.ctx.rec_channels().into_iter().find(|c| c.id == ch);
+            let playing = app.ctx.player.as_ref().and_then(|p| p.playing());
+            lines.push(separator(
+                inner.width,
+                &format!(
+                    "recordings: {} MHz {}({} files{})",
+                    chan.as_ref().map_or("-", |c| c.label.as_str()),
+                    chan.as_ref()
+                        .and_then(|c| c.name.as_deref())
+                        .map_or_else(String::new, |n| format!("{n} ")),
+                    chan.as_ref().map_or(0, |c| c.count),
+                    if chan.as_ref().is_some_and(|c| c.count > files.len()) {
+                        format!(", the newest {} listed", files.len())
+                    } else {
+                        String::new()
+                    }
+                ),
+            ));
+            lines.push(Line::from(dim(format!(
+                "  {:<19}  {:>9}  {:>9}",
+                "time", "length", "size"
+            ))));
+            let sel = app.rec_file_sel.min(files.len().saturating_sub(1));
+            for (i, r) in files
+                .iter()
+                .enumerate()
+                .skip(scroll_start(sel, files.len(), list_h))
+                .take(list_h)
+            {
+                let state = if playing == Some(r.id) {
+                    "  ▶ playing"
+                } else if r.writing {
+                    "  ● recording"
+                } else {
+                    ""
+                };
+                lines.push(selected(
+                    format!(
+                        "{:<2}{:<19}  {:>9}  {:>9}{state}",
+                        if i == sel { "▶" } else { "" },
+                        r.time,
+                        r.seconds.map_or_else(|| "-".to_string(), h_mm_ss),
+                        size(r.bytes)
+                    ),
+                    i == sel,
+                ));
+            }
+            (keys, files.len())
+        }
+    };
+    if list_len == 0 {
+        lines.push(Line::from(dim("  (no recordings)")));
+    }
+    let [body, keys_area] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(keys.len() as u16)]).areas(inner);
+    f.render_widget(Paragraph::new(lines), body);
     f.render_widget(Paragraph::new(keys), keys_area);
 }
 

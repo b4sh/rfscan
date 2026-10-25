@@ -182,7 +182,15 @@ body:not([data-tab="main"]) #main { display: none; }
 .listpane { display: none; }
 body[data-list="history"] #pane-history,
 body[data-list="activity"] #pane-activity,
-body[data-list="excl"] #pane-excl { display: block; }
+body[data-list="excl"] #pane-excl,
+body[data-list="recs"] #pane-recs { display: block; }
+/* without --record-dir there are no recordings */
+body.norec [data-l="recs"], body.norec [data-t="recs"] { display: none; }
+#pane-recs .lrow .acts { display: flex; gap: 8px; margin-left: auto; }
+#pane-recs .lrow .acts .smallbtn { min-width: 64px; }
+#pane-recs .lrow .acts .smallbtn.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+#pane-recs .lrow.file { cursor: default; }
+#pane-recs .rec { color: var(--danger); font-weight: 700; }
 /* the same header band on every list: title, count, action */
 .listhead { display: flex; align-items: center; gap: 12px; min-height: 50px; margin-bottom: 10px; padding: 8px 12px; border-radius: 6px; border-bottom: 1px solid var(--line); background: var(--card2); }
 .listhead h2 { margin: 0; font-size: 17px; }
@@ -225,7 +233,7 @@ body[data-list="excl"] #pane-excl { display: block; }
 /* bottom tab bar (phone) */
 nav.tabs {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 5;
-  display: grid; grid-template-columns: repeat(4, 1fr);
+  display: grid; grid-auto-flow: column; grid-auto-columns: 1fr;
   background: var(--card); border-top: 1px solid var(--line);
   padding-bottom: env(safe-area-inset-bottom);
 }
@@ -270,6 +278,8 @@ nav.tabs button.active { color: var(--accent); }
   #pane-activity .lrow.head [data-sort] { padding: 0; border: 0; background: none; }
   .lrow.head .ar { width: 9px; margin-left: 2px; font-size: 9px; }
   #pane-excl .lrow     { grid-template-columns: 96px minmax(120px, 1fr) 56px minmax(140px, 2fr); }
+  #pane-recs .lrow.chan { grid-template-columns: 96px minmax(80px, 1fr) 50px 64px 130px; }
+  #pane-recs .lrow.file { grid-template-columns: 170px 64px 70px 1fr; }
 }
 .conn.off { background: var(--danger); }
 .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 70px; z-index: 40; max-width: 90%; background: var(--danger); color: #fff; padding: 8px 14px; border-radius: 6px; font-weight: 600; display: none; }
@@ -359,6 +369,7 @@ body.nolocal #bAudio { grid-column: 1 / -1; }
         <button data-l="history">History</button>
         <button data-l="activity">Activity</button>
         <button data-l="excl">Exclusions</button>
+        <button data-l="recs">Recordings</button>
       </div>
 
       <div class="listpane" id="pane-history">
@@ -375,6 +386,11 @@ body.nolocal #bAudio { grid-column: 1 / -1; }
         <div class="listhead"><h2>Exclusions</h2><span class="stats" id="exclCount"></span></div>
         <div id="exclList"></div>
       </div>
+
+      <div class="listpane" id="pane-recs">
+        <div class="listhead"><h2 id="recTitle">Recordings</h2><span class="stats" id="recCount"></span><button class="smallbtn" id="recBack" hidden>◀ Channels</button></div>
+        <div id="recList"></div>
+      </div>
     </section>
   </div>
 </div>
@@ -384,6 +400,7 @@ body.nolocal #bAudio { grid-column: 1 / -1; }
   <button data-t="history"><span class="ico">☰</span>History</button>
   <button data-t="activity"><span class="ico">▤</span>Activity</button>
   <button data-t="excl"><span class="ico">⊘</span>Exclusions</button>
+  <button data-t="recs"><span class="ico">●</span>Recordings</button>
 </nav>
 
 <!-- exclude sheet -->
@@ -457,7 +474,7 @@ const fix1 = x => (x == null ? "-" : Number(x).toFixed(1));
 const recTag = r => `<span class="rec">${r ? "✓" : ""}</span>`;
 
 // State from rfscan: the last message of each kind.
-const S = { hello: null, status: null, lock: null, spectrum: null, history: [], activity: [], excl: [], exclAt: 0 };
+const S = { hello: null, status: null, lock: null, spectrum: null, history: [], activity: [], excl: [], exclAt: 0, recs: [], recFiles: null };
 let ws = null;
 
 function send(o) {
@@ -500,6 +517,12 @@ function connect() {
       case "history_add": S.history.unshift(m.item); S.history.length = Math.min(S.history.length, 200); renderHistory(); break;
       case "activity": S.activity = m.items; renderActivity(); break;
       case "exclusions": S.excl = m.items; S.exclAt = Date.now(); renderExcl(); break;
+      case "recordings": S.recs = m.items; renderRecs(); break;
+      case "rec_files":
+        // The last file of the channel was deleted: back to the channels.
+        if (m.items.length === 0) { S.recFiles = null; send({ c: "recordings" }); }
+        else if (recView === m.channel) S.recFiles = m;
+        renderRecs(); break;
       case "error": toast(m.msg); break;
     }
   };
@@ -568,6 +591,7 @@ function renderHello() {
   const h = S.hello;
   $("device").textContent = `${h.device} · ${h.rate}`;
   document.body.classList.toggle("nolocal", !h.local_audio);
+  document.body.classList.toggle("norec", !h.rec);
   $("exWide").textContent = `Exclude ±${h.exclude_wide} channel${h.exclude_wide === 1 ? "" : "s"}`;
   $("exDurs").innerHTML = [null, ...(h.exclude_minutes || [])].map(m =>
     `<button class="smallbtn" data-min="${m ?? ""}">${m ? m + " min" : "Permanent"}</button>`).join("");
@@ -773,6 +797,89 @@ function renderExcl() {
 // The minutes left tick down between list updates.
 setInterval(() => { if (S.excl.some(e => e.left_s != null)) renderExcl(); }, 15000);
 
+/* ---- recordings: the channels, then the files of one channel ---- */
+let recView = null;  // the channel whose files are shown
+function renderRecs() {
+  const files = recView !== null && S.recFiles && S.recFiles.channel === recView ? S.recFiles : null;
+  $("recBack").hidden = recView === null;
+  if (recView === null) {
+    $("recTitle").textContent = "Recordings";
+    $("recCount").textContent = S.recs.length + " channels";
+    $("recList").innerHTML = S.recs.length === 0 ? `<div class="empty">no recordings</div>` :
+      `<div class="lrow head chan"><span>Freq</span><span>Name</span><span>Files</span><span>Total</span><span>Last</span></div>` +
+      S.recs.map(c => `<div class="lrow chan" data-rc="${c.id}">
+        <span class="f">${esc(c.label)}</span><span class="n">${esc(c.name)}</span><span class="br"></span>
+        <span class="c" data-l="files">${c.count}</span><span class="c" data-l="total">${esc(c.total)}</span>
+        <span class="c" data-l="last">${esc(c.last)}</span></div>`).join("");
+    return;
+  }
+  $("recTitle").textContent = files ? `${files.label} ${files.name || ""}` : "Recordings";
+  $("recCount").textContent = files ? files.count + " files" + (files.count > files.items.length ? `, the newest ${files.items.length} listed` : "") : "";
+  $("recList").innerHTML = !files ? `<div class="empty">loading…</div>` :
+    `<div class="lrow head file"><span>Time</span><span>Length</span><span>Size</span><span></span></div>` +
+    files.items.map(f => `<div class="lrow file">
+      <span class="f">${esc(f.time)}</span><span class="c">${esc(f.dur ?? "-")}</span><span class="c">${esc(f.size)}</span>
+      <span class="acts">${f.writing ? `<span class="rec">● recording</span>` :
+        `<button class="smallbtn${Play_.id === f.id ? " on" : ""}" data-play="${f.id}">${Play_.id === f.id ? "■ stop" : "▶ play"}</button>
+        <button class="smallbtn warn" data-del="${f.id}">✕ del</button>`}</span></div>`).join("");
+}
+function openRecChannel(id) {
+  recView = id; S.recFiles = null;
+  renderRecs();
+  send({ c: "rec_files", channel: id });
+}
+$("recBack").onclick = () => { recView = null; S.recFiles = null; renderRecs(); send({ c: "recordings" }); };
+$("recList").onclick = e => {
+  const c = e.target.closest("[data-rc]"); if (c) { openRecChannel(+c.dataset.rc); return; }
+  const p = e.target.closest("[data-play]"); if (p) { Play_.toggle(+p.dataset.play); return; }
+  const d = e.target.closest("[data-del]"); if (!d) return;
+  const id = +d.dataset.del, f = S.recFiles && S.recFiles.items.find(x => x.id === id);
+  confirmBox(`Delete the recording ${f ? f.time : ""}?`, "The file is deleted from the disk. This cannot be undone.", () => {
+    if (Play_.id === id) Play_.stop();
+    send({ c: "rec_delete", id, channel: recView });
+  });
+};
+// Playback in the browser: the WAV (8 kHz μ-law) is decoded here, because browsers do not all
+// play μ-law WAV files themselves; independent of the scanner audio.
+const Play_ = {
+  ctx: null, src: null, id: null,
+  async toggle(id) {
+    if (this.id === id) { this.stop(); return; }
+    this.stop();
+    this.id = id; renderRecs();
+    try {
+      if (!this.ctx) this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+      await this.ctx.resume();
+      const r = await fetch(`/recording/${id}${location.search}`);
+      if (!r.ok) throw new Error("the file is not available");
+      const b = new Uint8Array(await r.arrayBuffer()), v = new DataView(b.buffer);
+      let at = 12, data = null, rate = 8000;
+      while (at + 8 <= b.length) {
+        const tag = String.fromCharCode(...b.subarray(at, at + 4)), len = v.getUint32(at + 4, true);
+        if (tag === "fmt ") rate = v.getUint32(at + 12, true);
+        if (tag === "data") { data = b.subarray(at + 8, Math.min(b.length, at + 8 + len)); break; }
+        at += 8 + len + (len & 1);
+      }
+      if (!data || data.length === 0) throw new Error("not a recording");
+      if (this.id !== id) return;
+      const buf = this.ctx.createBuffer(1, data.length, rate), ch = buf.getChannelData(0);
+      for (let i = 0; i < data.length; i++) ch[i] = ULAW[data[i]];
+      const src = this.ctx.createBufferSource();
+      src.buffer = buf; src.connect(this.ctx.destination);
+      src.onended = () => { if (this.src === src) { this.src = null; this.id = null; renderRecs(); } };
+      this.src = src; src.start();
+    } catch (err) {
+      this.id = null; renderRecs(); toast("playback: " + err.message);
+    }
+  },
+  stop() {
+    const src = this.src;
+    this.src = null; this.id = null;
+    if (src) try { src.stop(); } catch (e) {}
+    renderRecs();
+  },
+};
+
 /* ---- tabs, sheets ---- */
 function setTab(t) {
   if (t === "main") document.body.dataset.tab = "main";
@@ -780,7 +887,18 @@ function setTab(t) {
   document.querySelectorAll("nav.tabs button").forEach(b => b.classList.toggle("active", b.dataset.t === t));
   document.querySelectorAll(".listtabs button").forEach(b => b.classList.toggle("active", b.dataset.l === document.body.dataset.list));
   if (document.body.dataset.list === "activity") send({ c: "activity" });
+  if (document.body.dataset.list === "recs") refreshRecs();
 }
+// The recordings are not pushed either: asked for while visible (new recordings appear).
+function refreshRecs() {
+  if (recView === null) send({ c: "recordings" });
+  else send({ c: "rec_files", channel: recView });
+}
+function recsVisible() {
+  const wide = matchMedia("(min-width: 960px) and (orientation: landscape)").matches;
+  return document.body.dataset.list === "recs" && (wide || document.body.dataset.tab !== "main") && !document.hidden;
+}
+setInterval(() => { if (recsVisible()) refreshRecs(); }, 5000);
 
 // The activity list is not pushed: it is asked for while visible.
 function activityVisible() {

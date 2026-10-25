@@ -116,6 +116,8 @@ pub struct Config {
     pub channels_path: Option<PathBuf>,
     /// Disk usage above which recording pauses (`DISK_LIMIT`).
     pub disk_limit: f64,
+    /// The list of recordings: every closed file is added, the open one cannot be deleted.
+    pub library: Option<crate::recordings::SharedLibrary>,
 }
 
 /// The running recorder; dropping it closes the open file and ends the thread.
@@ -269,6 +271,7 @@ impl Worker {
                     )));
                     self.file = None;
                     self.failed = true;
+                    self.release();
                 }
             }
             if now >= self.next_disk && (self.file.is_some() || !on) {
@@ -315,6 +318,7 @@ impl Worker {
             )));
             self.file = None;
             self.failed = true;
+            self.release();
         }
     }
 
@@ -342,6 +346,11 @@ impl Worker {
             Ok(w) => {
                 self.info(format!("REC       {}", w.path.display()));
                 self.encoder = MulawEncoder::new(self.cfg.rate);
+                if let Some(lib) = &self.cfg.library
+                    && let Ok(mut l) = lib.lock()
+                {
+                    l.writing = Some(w.path.clone());
+                }
                 self.file = Some(w);
             }
             Err(e) => {
@@ -361,8 +370,23 @@ impl Worker {
                 Ok(()) => self.info(format!("REC END   {} ({seconds:.1} s)", path.display())),
                 Err(e) => self.warn(format!("recording {}: {e}", path.display())),
             }
+            if let Some(lib) = &self.cfg.library
+                && let Ok(mut l) = lib.lock()
+            {
+                l.add(&path);
+            }
         }
+        self.release();
         self.shared.writing.store(false, Ordering::Relaxed);
+    }
+
+    /// No file is being written any more (also after a write error): it may be deleted.
+    fn release(&self) {
+        if let Some(lib) = &self.cfg.library
+            && let Ok(mut l) = lib.lock()
+        {
+            l.writing = None;
+        }
     }
 
     /// Checks the disk usage of `--record-dir`: over the limit recording pauses (the open file
@@ -564,6 +588,7 @@ mod tests {
                 channels_path: None,
                 // The test must not depend on the disk usage of this computer.
                 disk_limit: 1.0,
+                library: None,
             },
             rx,
             Arc::new(Mutex::new(vec![145_550_000])),

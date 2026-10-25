@@ -32,6 +32,8 @@ pub struct AudioOut {
     pub active: Arc<AtomicBool>,
     /// Mute (`m` key in the TUI): the output plays silence, the buffer keeps draining.
     pub muted: Arc<AtomicBool>,
+    /// A recording is playing (TUI): the output plays it instead of the scanner audio.
+    pub playback_active: Arc<AtomicBool>,
 }
 
 /// State shared between the audio callback and the rest of the program.
@@ -82,6 +84,9 @@ struct Mixer {
     /// Mono mix for the recordings (`--record-dir`): only frames with audio (analog or decoded
     /// voice), so the silence between them, e.g. in the Hang state, is not recorded.
     rec: Option<rtrb::Producer<f32>>,
+    /// A recording played instead of the scanner audio while `active` is set (mono at the output
+    /// rate); otherwise the buffer is drained. The taps keep getting the scanner audio.
+    playback: Option<(rtrb::Consumer<f32>, Arc<AtomicBool>)>,
 }
 
 impl Mixer {
@@ -121,6 +126,16 @@ impl Mixer {
         };
         let analog = self.rx.read_chunk(n);
         let decoded = vrx.read_chunk(vn);
+        let mut playback = match &mut self.playback {
+            Some((p, active)) if active.load(Ordering::Relaxed) => Some(p),
+            Some((p, _)) => {
+                if let Ok(c) = p.read_chunk(p.slots()) {
+                    c.commit_all();
+                }
+                None
+            }
+            None => None,
+        };
         {
             let empty: &[f32] = &[];
             let (a1, a2) = analog.as_ref().map_or((empty, empty), |c| c.as_slices());
@@ -130,11 +145,12 @@ impl Mixer {
             let analog_frames = n / channels;
             for (i, frame) in data.chunks_mut(channels).enumerate() {
                 let vs = v.next().copied().unwrap_or(0.0);
+                let played = playback.as_mut().map(|p| p.pop().unwrap_or(0.0));
                 let mut mono = None;
                 for d in frame {
                     let s = soft_limit(a.next().copied().unwrap_or(0.0) + vs);
                     mono.get_or_insert(s);
-                    *d = T::from_sample(s * gain);
+                    *d = T::from_sample(played.unwrap_or(s) * gain);
                 }
                 if let Some(w) = &mut self.web {
                     let _ = w.push(mono.unwrap_or(0.0));
@@ -313,6 +329,8 @@ fn find_device(host: &cpal::Host, wanted: Option<&str>) -> Result<(cpal::Device,
 /// Web GUI and recording tap capacity in seconds (drained every few tens of ms).
 const WEB_TAP_S: f64 = 0.5;
 const REC_TAP_S: f64 = 1.0;
+/// Playback buffer of a recording (filled by the player at the pace it is played).
+const PLAYBACK_S: f64 = 0.3;
 
 /// The audio output with its buffers.
 pub struct Opened {
@@ -325,6 +343,8 @@ pub struct Opened {
     pub web: Option<rtrb::Consumer<f32>>,
     /// The mono mix at the output rate for the recordings, only frames with audio (with `rec`).
     pub rec: Option<rtrb::Consumer<f32>>,
+    /// Playback of recordings on the local output (with `rec` and a local output).
+    pub playback: Option<rtrb::Producer<f32>>,
 }
 
 impl AudioOut {
@@ -366,6 +386,14 @@ impl AudioOut {
         } else {
             (None, None)
         };
+        // Playback of recordings needs a local output.
+        let playback_active = Arc::new(AtomicBool::new(false));
+        let (play_tx, play_rx) = if rec && local {
+            let (t, r) = rtrb::RingBuffer::new(((PLAYBACK_S * rate) as usize).max(1));
+            (Some(t), Some((r, playback_active.clone())))
+        } else {
+            (None, None)
+        };
         let underruns = Arc::new(AtomicU64::new(0));
         let active = Arc::new(AtomicBool::new(false));
         let muted = Arc::new(AtomicBool::new(false));
@@ -387,6 +415,7 @@ impl AudioOut {
             vprimed: false,
             web: web_tx,
             rec: rec_tx,
+            playback: play_rx,
         };
         let (stream, clock) = match output {
             Some((device, _, supported)) => {
@@ -415,11 +444,13 @@ impl AudioOut {
                 underruns,
                 active,
                 muted,
+                playback_active,
             },
             audio: tx,
             voice: vtx,
             web: web_rx,
             rec: rec_rx,
+            playback: play_tx,
         })
     }
 }

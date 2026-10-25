@@ -262,6 +262,12 @@ records the audio of the channels marked `rec` in the [channel file](#channel-fi
 - **Files.** One WAV file per transmission, named by its local start time, e.g. `20261025-143012.wav`. A return of the signal during the pause (`--pause`) continues the same file, and the silence of the pause is not recorded. The format is the audio of the web GUI: 8 kHz mono G.711 μ-law (about 29 MB per hour of audio) after the 300-3000 Hz filter, with the noise reduction, and on `digi` channels the voice decoded by DSD-FME. It plays in common players (Windows, VLC, Audacity).
 - **Safety.** The file is written by a thread of its own, so a slow disk never slows down scanning. Its header is updated every few seconds, so a file left by a crash or a power cut still plays. When the disk of `--record-dir` is more than 90% full, rfscan closes the file, pauses recording with a warning and resumes by itself when the usage drops below 90%; the `rec` statistic shows `off` (no `--record-dir`), `on` or `paused`.
 
+**Listening and deleting.** The recordings are listed per channel: the **Recordings** tab of the web GUI and `w` in the TUI show the channels (newest recording first), and a channel shows its files (at most the newest 500; older ones stay on the disk). The list is read at startup, and every new recording appears in it at once.
+
+- In the web GUI **▶ play** plays a file in the browser (independent of the scanner audio), **✕ del** deletes it after a confirmation.
+- In the TUI `Enter` on a channel shows its files, `Enter` on a file plays or stops it on the local audio output, `d` deletes it after a confirmation, `Esc` goes back. While a file plays, the scanner audio is muted (scanning and recording go on) and `▶ PLAY` is shown in the header; with `--local-audio off` there is no local output and the TUI only says so.
+- Only files inside `--record-dir` can be deleted, never the one being recorded; a channel subdirectory left empty is removed.
+
 ## TUI
 
 When the output is a terminal, rfscan runs with the TUI. The layout adapts to the window size: from about 100x30 the frequency is shown in a large font, down to 80x24 in a compact layout. The scanning screen shows the range, the position in it, the mini-spectrum of the current window and the statistics; the lock screen shows the frequency, the name, the SNR bar with the thresholds and the measurements; below is the detection history.
@@ -278,6 +284,7 @@ When the output is a terminal, rfscan runs with the TUI. The layout adapts to th
 | `n`, `<` / `>` | noise reduction on/off, strength |
 | `a` | activity screen (`←` / `→` sort column, `s` reverse the order, `l` name a channel, `Tab` in the popup: `digi`, `r` record its audio on/off, `x` exclude, `d` delete the entry, `c` clear) |
 | `e` | exclusions screen (`Enter` edit the note, `d` remove, `s` keep a timed exclusion for good) |
+| `w` | recordings screen, with `--record-dir` (`Enter` a channel's files, `Enter` play / stop a file, `d` delete it, `Esc` back) |
 | `Tab` | select a detection history row (arrows move, `l` name the channel, `r` record its audio on/off, `x` / `X` exclude it (with adjacent channels), `Tab` / `Esc` back) |
 
 ## Console mode and log file
@@ -304,7 +311,7 @@ rfscan --scan-range 144M-146M --web-gui 8080            # this computer only: ht
 rfscan --scan-range 144M-146M --web-gui 0.0.0.0:8080    # the home network
 ```
 
-rfscan prints the link at startup. The page shows the frequency or channel number with its name, the state, the signal level, and has buttons for pause, skip, exclude (with a note, for good or for 10 / 30 / 60 minutes), undo, squelch, noise reduction and audio; the history and the activity log (tapping an entry names the channel, sets the `digi` mode, switches its audio recording or excludes it; an activity entry can also be deleted, and the activity log is sorted by tapping a column header) and the exclusions (tapping one edits its note, keeps a timed one for good or deletes it; a timed one shows the minutes left) are separate tabs. It has a dark and a light theme. It works with the TUI or with `--headless`, and several browsers can be connected at once, each with full control.
+rfscan prints the link at startup. The page shows the frequency or channel number with its name, the state, the signal level, and has buttons for pause, skip, exclude (with a note, for good or for 10 / 30 / 60 minutes), undo, squelch, noise reduction and audio; the history and the activity log (tapping an entry names the channel, sets the `digi` mode, switches its audio recording or excludes it; an activity entry can also be deleted, and the activity log is sorted by tapping a column header) the exclusions (tapping one edits its note, keeps a timed one for good or deletes it; a timed one shows the minutes left) and, with `--record-dir`, the recordings (play or delete) are separate tabs. It has a dark and a light theme. It works with the TUI or with `--headless`, and several browsers can be connected at once, each with full control.
 
 The audio is sent to the browser as 8 kHz μ-law (64 kbit/s, 300-3000 Hz) after **Audio** is tapped (browsers need a tap before playing sound); the delay is about 0.2-0.3 s more than the local audio. The local audio keeps playing: **Mute PC** mutes it (like `m` in the TUI), and `--local-audio off` turns the local output off completely (the web page still gets the audio).
 
