@@ -235,6 +235,16 @@ pub struct Cli {
     #[arg(long, hide_short_help = true, default_value = "on", value_parser = parse_on_off, action = clap::ArgAction::Set, value_name = "on|off", help_heading = H_AUDIO)]
     pub local_audio: bool,
 
+    /// Audio recording: the directory of the recordings (it must exist)
+    ///
+    /// Audio recording of the channels marked rec in the channel file ([r] on a history or
+    /// activity row): one WAV file (8 kHz mu-law) per activity in a subdirectory of the channel,
+    /// e.g. 145.550-Name/20261025-143012.wav. The directory must exist; rfscan creates only the
+    /// subdirectories. Without this option nothing is recorded. Over 90% disk usage recording
+    /// pauses until the usage drops
+    #[arg(long, hide_short_help = true, value_name = "DIR", help_heading = H_AUDIO)]
+    pub record_dir: Option<std::path::PathBuf>,
+
     /// Digi output for DSD-FME: TCP server [HOST:]PORT (PORT alone = 127.0.0.1), e.g. 7355.
     /// PCM stream 48 kHz s16le mono: silence or the raw discriminator on digi channels.
     /// Without this option digi channels from the channel file are skipped

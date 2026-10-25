@@ -12,6 +12,7 @@ The full description of rfscan's functions. A short introduction and the quick s
 - [Airband channel numbers (8.33 kHz)](#airband-channel-numbers-833-khz)
 - [Audio](#audio)
 - [Digital voice through DSD-FME](#digital-voice-through-dsd-fme)
+- [Audio recording](#audio-recording)
 - [TUI](#tui)
 - [Console mode and log file](#console-mode-and-log-file)
 - [Web GUI](#web-gui)
@@ -131,7 +132,7 @@ Without a scan mode rfscan scans 144-146 MHz, NFM, 12.5 kHz.
 
 ## Channel file: names and modes
 
-The channel file (default `~/.config/rfscan/rfscan-channels.txt`, or `--channels-file`) gives names and modes to known frequencies. It is read at every start; rfscan writes it only when you name a channel on the activity screen. One channel per line, `#` starts a comment:
+The channel file (default `~/.config/rfscan/rfscan-channels.txt`, or `--channels-file`) gives names and modes to known frequencies. It is read at every start; rfscan writes it only when you name a channel, mark it `digi` or switch its recording in the TUI or the web GUI. One channel per line, `#` starts a comment:
 
 ```
 # rfscan: channels
@@ -139,12 +140,14 @@ The channel file (default `~/.config/rfscan/rfscan-channels.txt`, or `--channels
 118.100 am bw=10k "TOWER"
 145.600 fm "REPEATER"
 438.800 digi "DMR REPEATER"
+145.550 rec "SIMPLEX"
 ```
 
-Line syntax: `FREQUENCY_MHz [am|fm|digi] [bw=WIDTH] ["name"]`; the mode and `bw=` in any order before the name, everything except the frequency optional. Names may contain any characters (UTF-8). A line that cannot be read gives a warning with its number and is skipped.
+Line syntax: `FREQUENCY_MHz [am|fm|digi] [rec] [bw=WIDTH] ["name"]`; the mode, `rec` and `bw=` in any order before the name, everything except the frequency optional. Names may contain any characters (UTF-8). A line that cannot be read gives a warning with its number and is skipped.
 
 - The name is shown when the scanner stops on the frequency (TUI, web GUI, console, history, activity, `--report`), both when scanning a range and channels. Unknown frequencies show no name.
 - The mode of the file applies also while scanning a range: a known `digi` frequency in an NFM range is handled as `digi`. Precedence: the mode in `--scan-channels F:MODE`, then the file, then the range suffix, then `--mode`. The `bw=` of the file sets the demodulator width.
+- `rec` marks a channel whose audio is recorded (see [Audio recording](#audio-recording)).
 - In range mode an entry matches the nearest grid channel within half a step, and rfscan listens on that grid channel. An entry farther than 1% of the step from the grid (e.g. `433.450` in `433.420M-433.470M` with a 12.5 kHz step) gives a warning at startup: choose the range start or step so that the grid includes it.
 
 ## Exclusions
@@ -247,6 +250,18 @@ For DSD-FME on another computer, or with your own settings. **Start order: rfsca
 
 The discriminator stream is PCM s16le, mono, 48 kHz, continuous (about 96,000 B/s): silence outside `digi` channels, the discriminator during a transmission on a `digi` channel. Disconnecting and reconnecting DSD-FME does not interrupt scanning. The voice sample rate is estimated from the stream; give it as `--digi-audio-udp 23456:8000` if needed. Without `--digi-audio-udp`, DSD-FME plays the voice itself. The stream level is changed with `--digi-gain dB`.
 
+## Audio recording
+
+```
+rfscan --scan-range 144M-146M --record-dir D:\Radio\recordings
+```
+
+records the audio of the channels marked `rec` in the [channel file](#channel-file-names-and-modes). A channel is marked (or unmarked) with `r` on a detection history row or on the activity screen in the TUI, or with **Record audio** in the entry sheet of the web GUI; the change is saved to the channel file and applies at once, also during a transmission. A ✓ in the `rec` column of the history and the activity list shows the marked channels, and `REC` in the header while a file is being written.
+
+- **Directory.** `--record-dir DIR` (also in `rfscan.conf`) must exist: rfscan does not create it, and a missing one is an error at startup. Without the option nothing is recorded (`r` only says so). Each channel gets its own subdirectory: the frequency (in the airband the channel number), then the name with spaces as `_`, without characters Windows does not allow in file names and with accented letters written in plain ASCII, e.g. `145.550-SIMPLEX` or `433.450-Lodz_R1`. Renaming a channel starts a new subdirectory; the old recordings stay where they are.
+- **Files.** One WAV file per transmission, named by its local start time, e.g. `20261025-143012.wav`. A return of the signal during the pause (`--pause`) continues the same file, and the silence of the pause is not recorded. The format is the audio of the web GUI: 8 kHz mono G.711 μ-law (about 29 MB per hour of audio) after the 300-3000 Hz filter, with the noise reduction, and on `digi` channels the voice decoded by DSD-FME. It plays in common players (Windows, VLC, Audacity).
+- **Safety.** The file is written by a thread of its own, so a slow disk never slows down scanning. Its header is updated every few seconds, so a file left by a crash or a power cut still plays. When the disk of `--record-dir` is more than 90% full, rfscan closes the file, pauses recording with a warning and resumes by itself when the usage drops below 90%; the `rec` statistic shows `off` (no `--record-dir`), `on` or `paused`.
+
 ## TUI
 
 When the output is a terminal, rfscan runs with the TUI. The layout adapts to the window size: from about 100x30 the frequency is shown in a large font, down to 80x24 in a compact layout. The scanning screen shows the range, the position in it, the mini-spectrum of the current window and the statistics; the lock screen shows the frequency, the name, the SNR bar with the thresholds and the measurements; below is the detection history.
@@ -261,9 +276,9 @@ When the output is a terminal, rfscan runs with the TUI. The layout adapts to th
 | `+` / `-` | squelch threshold |
 | `m` | mute |
 | `n`, `<` / `>` | noise reduction on/off, strength |
-| `a` | activity screen (`←` / `→` sort column, `s` reverse the order, `l` name a channel, `Tab` in the popup: `digi`, `x` exclude, `d` delete the entry, `c` clear) |
+| `a` | activity screen (`←` / `→` sort column, `s` reverse the order, `l` name a channel, `Tab` in the popup: `digi`, `r` record its audio on/off, `x` exclude, `d` delete the entry, `c` clear) |
 | `e` | exclusions screen (`Enter` edit the note, `d` remove, `s` keep a timed exclusion for good) |
-| `Tab` | select a detection history row (arrows move, `l` name the channel, `x` / `X` exclude it (with adjacent channels), `Tab` / `Esc` back) |
+| `Tab` | select a detection history row (arrows move, `l` name the channel, `r` record its audio on/off, `x` / `X` exclude it (with adjacent channels), `Tab` / `Esc` back) |
 
 ## Console mode and log file
 
@@ -289,7 +304,7 @@ rfscan --scan-range 144M-146M --web-gui 8080            # this computer only: ht
 rfscan --scan-range 144M-146M --web-gui 0.0.0.0:8080    # the home network
 ```
 
-rfscan prints the link at startup. The page shows the frequency or channel number with its name, the state, the signal level, and has buttons for pause, skip, exclude (with a note, for good or for 10 / 30 / 60 minutes), undo, squelch, noise reduction and audio; the history and the activity log (tapping an entry names the channel, sets the `digi` mode or excludes it; an activity entry can also be deleted, and the activity log is sorted by tapping a column header) and the exclusions (tapping one edits its note, keeps a timed one for good or deletes it; a timed one shows the minutes left) are separate tabs. It has a dark and a light theme. It works with the TUI or with `--headless`, and several browsers can be connected at once, each with full control.
+rfscan prints the link at startup. The page shows the frequency or channel number with its name, the state, the signal level, and has buttons for pause, skip, exclude (with a note, for good or for 10 / 30 / 60 minutes), undo, squelch, noise reduction and audio; the history and the activity log (tapping an entry names the channel, sets the `digi` mode, switches its audio recording or excludes it; an activity entry can also be deleted, and the activity log is sorted by tapping a column header) and the exclusions (tapping one edits its note, keeps a timed one for good or deletes it; a timed one shows the minutes left) are separate tabs. It has a dark and a light theme. It works with the TUI or with `--headless`, and several browsers can be connected at once, each with full control.
 
 The audio is sent to the browser as 8 kHz μ-law (64 kbit/s, 300-3000 Hz) after **Audio** is tapped (browsers need a tap before playing sound); the delay is about 0.2-0.3 s more than the local audio. The local audio keeps playing: **Mute PC** mutes it (like `m` in the TUI), and `--local-audio off` turns the local output off completely (the web page still gets the audio).
 
@@ -332,7 +347,7 @@ rfscan keeps its files in `~/.config/rfscan` (on Windows `C:\Users\USER\.config\
 
 | File | Contents | Option |
 |---|---|---|
-| `rfscan-channels.txt` | channel names, modes and bandwidths | `--channels-file` |
+| `rfscan-channels.txt` | channel names, modes, bandwidths and `rec` marks | `--channels-file` |
 | `rfscan-exclude.txt` | excluded frequencies with notes | `--exclude-file` |
 | `rfscan-activity.txt` | activity log (`rfscan --report`) | `--activity-file` |
 | `rfscan.conf` | options used at every start | `--config` |

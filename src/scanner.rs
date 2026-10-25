@@ -408,6 +408,8 @@ pub struct Session<'a> {
     pub exclusions: &'a mut ExclusionCtl,
     /// User interface (TUI), `None` in headless mode.
     pub ui: Option<UiLink>,
+    /// Audio recording (`--record-dir`): told where each activity begins and ends.
+    pub recorder: Option<&'a crate::recorder::Link>,
 }
 
 /// Live view of a lock for the UI.
@@ -503,6 +505,7 @@ pub fn run(
         digi,
         exclusions,
         ui,
+        recorder,
     } = session;
     // The entry threshold can change live from the UI.
     let mut cfg = cfg.clone();
@@ -741,6 +744,9 @@ pub fn run(
                 if let (State::Locked(_), Some(a)) = (state, audio.as_deref_mut()) {
                     a.stop();
                 }
+                if let Some(r) = recorder {
+                    r.end();
+                }
                 send(UiEvent::History(history_item(&l, end)));
                 send(UiEvent::Unlock);
                 pos = (l.window + 1) % windows.len();
@@ -908,6 +914,9 @@ pub fn run(
                                 if let Ok(mut log) = activity.lock() {
                                     log.hit(lock.freq, lock.mode);
                                 }
+                                if let Some(r) = recorder {
+                                    r.begin(lock.freq, ch.raster25);
+                                }
                                 if lock.mode == Modulation::Digi {
                                     logev!(
                                         log,
@@ -1069,6 +1078,9 @@ pub fn run(
                     )));
                     State::Locked(lock)
                 } else if lock.above.is_none() && now - since >= cfg.pause && !paused {
+                    if let Some(r) = recorder {
+                        r.end();
+                    }
                     send(UiEvent::History(history_item(&lock, since)));
                     send(UiEvent::Unlock);
                     pos = (lock.window + 1) % windows.len();
@@ -1169,6 +1181,14 @@ pub fn run(
                 }
             }
         }
+        if let Some(r) = recorder {
+            while let Ok(e) = r.events.try_recv() {
+                match e {
+                    crate::recorder::Event::Info(m) => logev!(log, Level::Info, now, "{m}"),
+                    crate::recorder::Event::Warning(m) => logwarn!(log, "WARNING: {m}"),
+                }
+            }
+        }
         if now >= save_at {
             save_activity(activity, activity_path);
             save_at = now + ACTIVITY_SAVE_INTERVAL;
@@ -1193,6 +1213,9 @@ pub fn run(
     }
     if let (State::Locked(_), Some(a)) = (state, audio.as_deref_mut()) {
         a.stop();
+    }
+    if let (State::Locked(_) | State::Hang(..), Some(r)) = (state, recorder) {
+        r.end();
     }
     if let Some(a) = audio {
         // The last report arrives after Stop; a short moment to receive it.

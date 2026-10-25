@@ -20,6 +20,7 @@ mod log;
 mod paths;
 mod plan;
 mod record;
+mod recorder;
 mod scanner;
 mod ui;
 mod web;
@@ -834,12 +835,48 @@ fn run_scan(cli: &Cli, src: &mut SoapySource, rate: f64, log: &mut Log) -> anyho
         audio: audio_tx,
         voice: voice_tx,
         web: web_audio,
+        rec: rec_tap,
     } = audio::AudioOut::open(
         cli.audio_device.as_deref(),
         cli.local_audio,
         cli.web_gui.is_some(),
+        cli.record_dir.is_some(),
     )
     .map_err(anyhow::Error::msg)?;
+    // Audio recording of the channels marked `rec` (--record-dir). The list is shared with the
+    // interfaces, which switch it.
+    let channels_path = cli.channels_file.clone().or_else(channel_db::default_path);
+    let rec_list: recorder::RecList = Arc::new(Mutex::new(
+        channels_path
+            .as_deref()
+            .and_then(|p| channel_db::load(p).ok())
+            .map(|(entries, _)| entries.iter().filter(|e| e.rec).map(|e| e.freq).collect())
+            .unwrap_or_default(),
+    ));
+    let rec = match (&cli.record_dir, rec_tap) {
+        (Some(dir), Some(tap)) => {
+            let r = recorder::start(
+                recorder::Config {
+                    dir: dir.clone(),
+                    rate: out.rate,
+                    channels_path: channels_path.clone(),
+                    disk_limit: recorder::DISK_LIMIT,
+                },
+                tap,
+                rec_list.clone(),
+            )
+            .map_err(anyhow::Error::msg)?;
+            logln!(
+                log,
+                Level::Debug,
+                "recording: {} ({} channel(s) marked rec)",
+                dir.display(),
+                rec_list.lock().map_or(0, |l| l.len())
+            );
+            Some(r)
+        }
+        _ => None,
+    };
     // Digi output: listening from startup, an error (e.g. a busy port) ends the program
     //. With --digi on a port chosen by the system, for the DSD-FME started below.
     let digi_addr = match (cli.digi, cli.digi_tcp) {
@@ -1093,6 +1130,8 @@ fn run_scan(cli: &Cli, src: &mut SoapySource, rate: f64, log: &mut Log) -> anyho
             dsd: dsd.as_ref().map(|d| d.state.clone()),
             dsd_console: dsd.as_ref().map(|d| d.console.clone()),
             voice: voice.as_ref().map(|v| v.stats.clone()),
+            rec_list: rec_list.clone(),
+            recorder: rec.as_ref().map(|r| r.shared.clone()),
         }
     });
     let mut ui_link = None;
@@ -1181,6 +1220,7 @@ fn run_scan(cli: &Cli, src: &mut SoapySource, rate: f64, log: &mut Log) -> anyho
             digi: digi.as_ref(),
             exclusions: &mut exclusions,
             ui: ui_link,
+            recorder: rec.as_ref().map(|r| &r.link),
         },
         log,
     );
@@ -1202,6 +1242,15 @@ fn run_scan(cli: &Cli, src: &mut SoapySource, rate: f64, log: &mut Log) -> anyho
     // Closing the message channel ends the DSP thread.
     drop(link);
     let _ = worker.join();
+    // The open recording is closed; its last messages go to the log.
+    if let Some(r) = rec {
+        for e in r.finish() {
+            match e {
+                recorder::Event::Info(m) => logln!(log, Level::Info, "{m}"),
+                recorder::Event::Warning(m) => logwarn!(log, "WARNING: {m}"),
+            }
+        }
+    }
     // DSD-FME first, while its TCP input is still open.
     drop(dsd);
     drop(voice);
@@ -1473,6 +1522,15 @@ Audio outputs (--audio-device):"
             );
         }
     }
+    // --record-dir: rfscan never creates it; checked before the device is opened.
+    if let Some(dir) = &cli.record_dir
+        && !dir.is_dir()
+    {
+        bail!(
+            "--record-dir: the directory {} does not exist (rfscan does not create it)",
+            dir.display()
+        );
+    }
     ctrlc::set_handler(|| STOP.store(true, Ordering::Relaxed))
         .context("cannot set the Ctrl+C handler")?;
 
@@ -1634,6 +1692,7 @@ mod tests {
             mode,
             bw,
             name: Some(format!("K{freq}")),
+            rec: false,
             raster25: false,
             freq_text: String::new(),
             line: 1,

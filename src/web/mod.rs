@@ -419,6 +419,11 @@ enum ClientMsg {
         name: String,
         digi: bool,
     },
+    /// Audio recording of a channel on or off (`rec` in the channel file).
+    Rec {
+        freq: u64,
+        on: bool,
+    },
     ClearActivity,
     DeleteActivity {
         freq: u64,
@@ -528,6 +533,15 @@ fn handle(hub: &Hub, cmd: ClientMsg) -> Option<Value> {
                 }
                 Err(e) => return Some(error_json(&e)),
             }
+        }
+        ClientMsg::Rec { freq, on } => {
+            if let Err(e) = ctx.set_rec(freq, on) {
+                return Some(error_json(&e));
+            }
+            let activity = activity_json(&ctx);
+            drop(ctx);
+            resend_history(hub);
+            return Some(activity);
         }
         ClientMsg::ClearActivity => {
             if let Err(e) = ctx.clear_activity() {
@@ -666,6 +680,7 @@ fn hello_json(ctx: &UiContext, cfg: &WebConfig) -> Value {
         "digi": ctx.digi.is_some(),
         "exclude_wide": cfg.exclude_wide,
         "exclude_minutes": TIMED_MINUTES,
+        "rec": ctx.recorder.is_some(),
     })
 }
 
@@ -754,6 +769,8 @@ fn status_json(ctx: &UiContext, s: &Status, hub: &Hub) -> Value {
         "ram_mb": ram.map(|b| b >> 20),
         "exclusions": ctx.exclusions.lock().map_or(0, |l| l.len()),
         "digi": digi_state(ctx),
+        "rec": ctx.rec_state(),
+        "rec_writing": ctx.rec_writing(),
     })
 }
 
@@ -873,6 +890,7 @@ fn history_item_json(ctx: &UiContext, h: &HistoryItem) -> Value {
         "label": ctx.freq_label(h.freq),
         "name": ctx.names.get(h.channel).cloned().flatten(),
         "mode": h.mode.name(),
+        "rec": ctx.rec_near(h.freq),
         "snr": round1(h.peak_snr_db),
         "rssi": round1(h.peak_rssi_db),
         "dur": format_duration(h.duration),
@@ -895,6 +913,7 @@ fn activity_json(ctx: &UiContext) -> Value {
                 "label": ctx.freq_label(r.freq),
                 "name": r.name,
                 "mode": r.mode,
+                "rec": r.rec,
                 "total": seconds(r.total),
                 "session": seconds(r.session),
                 // Seconds for sorting in the browser.
@@ -936,9 +955,7 @@ async fn audio_task(
     rate: f64,
     mut stop: watch::Receiver<bool>,
 ) {
-    let mut band = Sos::bandpass(AUDIO_BAND.0, AUDIO_BAND.1, rate);
-    let mut anti_alias = Sos::lowpass(ANTI_ALIAS.0, ANTI_ALIAS.1, ANTI_ALIAS.2, rate);
-    let mut resampler = Resampler::new(rate, AUDIO_RATE);
+    let mut encoder = MulawEncoder::new(rate);
     let mut frame: Vec<u8> = Vec::with_capacity(AUDIO_FRAME);
     let mut tick = tokio::time::interval(AUDIO_PERIOD);
     loop {
@@ -950,8 +967,8 @@ async fn audio_task(
             continue;
         };
         for x in chunk {
-            resampler.push(anti_alias.process(band.process(x)), |y| {
-                frame.push(mulaw(y));
+            encoder.push(x, |u| {
+                frame.push(u);
                 if frame.len() == AUDIO_FRAME {
                     let _ = hub.tx.send(Out::Audio(Bytes::from(std::mem::replace(
                         &mut frame,
@@ -960,6 +977,34 @@ async fn audio_task(
                 }
             });
         }
+    }
+}
+
+/// Sample rate of the μ-law audio (browser audio and recordings).
+pub(crate) const MULAW_RATE: f64 = AUDIO_RATE;
+
+/// The browser audio chain, also used for recordings: band-pass, anti-alias low-pass,
+/// resampling to 8 kHz, μ-law.
+pub(crate) struct MulawEncoder {
+    band: Sos,
+    anti_alias: Sos,
+    resampler: Resampler,
+}
+
+impl MulawEncoder {
+    /// An encoder of samples at `rate`.
+    pub(crate) fn new(rate: f64) -> Self {
+        MulawEncoder {
+            band: Sos::bandpass(AUDIO_BAND.0, AUDIO_BAND.1, rate),
+            anti_alias: Sos::lowpass(ANTI_ALIAS.0, ANTI_ALIAS.1, ANTI_ALIAS.2, rate),
+            resampler: Resampler::new(rate, AUDIO_RATE),
+        }
+    }
+
+    /// Takes one sample; `out` gets the μ-law bytes at 8 kHz.
+    pub(crate) fn push(&mut self, x: f32, mut out: impl FnMut(u8)) {
+        let y = self.anti_alias.process(self.band.process(x));
+        self.resampler.push(y, |s| out(mulaw(s)));
     }
 }
 
@@ -1088,6 +1133,13 @@ mod tests {
         assert!(matches!(
             serde_json::from_str::<ClientMsg>(r#"{"c":"nr_step","d":-1}"#).unwrap(),
             ClientMsg::NrStep { d: -1 }
+        ));
+        assert!(matches!(
+            serde_json::from_str::<ClientMsg>(r#"{"c":"rec","freq":145550000,"on":true}"#).unwrap(),
+            ClientMsg::Rec {
+                freq: 145_550_000,
+                on: true
+            }
         ));
         assert_eq!(clean_text("  a\u{7}b  "), "ab");
     }

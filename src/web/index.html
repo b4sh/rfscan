@@ -207,6 +207,11 @@ body[data-list="excl"] #pane-excl { display: block; }
 .durs .smallbtn.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .mode { display: inline-block; width: 38px; text-align: center; font-size: 10px; font-weight: 800; padding: 1px 0; border-radius: 3px; background: var(--card2); color: var(--dim); }
 .mode.digi { color: var(--digi); }
+/* recording: the mark in the lists, the REC pill while a file is written */
+.lrow .rec { color: var(--danger); font-weight: 800; }
+.recpill { color: #fff; background: var(--danger); border-color: var(--danger); }
+#itRec { accent-color: var(--danger); }
+#pane-activity .lrow.head .rh { display: none; }
 .smallbtn { min-height: 32px; padding: 0 10px; border-radius: 5px; border: 1px solid var(--line); background: var(--card2); font-weight: 700; font-size: 13px; cursor: pointer; }
 /* activity sort: the headers are always shown, on a phone as sort keys large enough to tap */
 #pane-activity .lrow.head { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 0 10px; font-size: 13px; font-weight: 700; color: var(--faint); text-transform: uppercase; letter-spacing: .3px; cursor: default; }
@@ -258,8 +263,9 @@ nav.tabs button.active { color: var(--accent); }
   .lrow .n { flex: none; }
   .lrow .mode { justify-self: start; width: 38px; font-size: 10px; }
   .lrow.head { display: grid; font-size: 11px; font-weight: 700; color: var(--faint); text-transform: uppercase; letter-spacing: .5px; cursor: default; }
-  #pane-history .lrow  { grid-template-columns: 96px 44px minmax(60px, 1fr) 70px 50px 64px 84px; }
-  #pane-activity .lrow, #pane-activity .lrow.head { display: grid; gap: 10px; grid-template-columns: 96px 50px minmax(54px, 1fr) 58px 70px 48px 124px; }
+  #pane-history .lrow  { grid-template-columns: 96px 44px 24px minmax(60px, 1fr) 70px 50px 64px 84px; }
+  #pane-activity .lrow, #pane-activity .lrow.head { display: grid; gap: 10px; grid-template-columns: 96px 50px 24px minmax(54px, 1fr) 58px 70px 48px 124px; }
+  #pane-activity .lrow.head .rh { display: block; }
   #pane-activity .lrow.head { padding: 5px 2px; font-size: 11px; }
   #pane-activity .lrow.head [data-sort] { padding: 0; border: 0; background: none; }
   .lrow.head .ar { width: 9px; margin-left: 2px; font-size: 9px; }
@@ -282,6 +288,7 @@ body.nolocal #bAudio { grid-column: 1 / -1; }
   <span class="brand">rfscan</span>
   <span class="device" id="device"></span>
   <span class="grow"></span>
+  <span class="pill recpill" id="recPill" hidden>● REC</span>
   <span class="pill" id="statePill">OFFLINE</span>
   <button class="theme" id="bTheme" title="light / dark">◐</button>
 </header>
@@ -416,7 +423,8 @@ body.nolocal #bAudio { grid-column: 1 / -1; }
     <div class="sub" id="itInfo"></div>
     <input type="text" id="itName" maxlength="40" placeholder="Channel name">
     <label class="switch">Digital (DSD-FME) <input type="checkbox" id="itDigi"></label>
-    <button class="btn primary" style="width:100%" id="itSave">Save label</button>
+    <label class="switch">Record audio <input type="checkbox" id="itRec"></label>
+    <button class="btn primary" style="width:100%" id="itSave">Save channel</button>
     <div class="row">
       <button class="btn warn" id="itExclude">✕ Exclude</button>
       <button class="btn" data-close>Cancel</button>
@@ -446,6 +454,7 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": 
 const fmtT = s => Math.floor(s / 60) + ":" + String(Math.floor(s % 60)).padStart(2, "0");
 const modeTag = m => m ? `<span class="mode ${m === "DIGI" ? "digi" : ""}">${esc(m)}</span>` : `<span></span>`;
 const fix1 = x => (x == null ? "-" : Number(x).toFixed(1));
+const recTag = r => `<span class="rec">${r ? "✓" : ""}</span>`;
 
 // State from rfscan: the last message of each kind.
 const S = { hello: null, status: null, lock: null, spectrum: null, history: [], activity: [], excl: [], exclAt: 0 };
@@ -573,6 +582,7 @@ function renderHeader() {
   const map = { scanning: ["SCANNING", "--scan"], locked: ["LOCKED", "--lock"], hang: ["HANG", "--hang"], paused: ["PAUSED", "--pause"] };
   const [txt, col] = st ? map[st.state] : ["OFFLINE", "--danger"];
   p.textContent = txt; p.style.color = `var(${col})`;
+  $("recPill").hidden = !(st && st.rec_writing);
 }
 
 // The display has a fixed set of fields (like the display of a device): every update only changes
@@ -693,16 +703,16 @@ function renderStats() {
   const st = S.status;
   if (!st) { $("stats").innerHTML = "<span>not connected</span>"; return; }
   $("stats").innerHTML = `<span>speed <b>${st.mhz_s} MHz/s</b> · ${st.w_s} w/s</span><span>ovf/timeouts <b>${st.ovf} / ${st.timeouts}</b></span>
-    <span>rejected <b>${st.rejected}</b></span><span>exclusions <b>${st.exclusions}</b></span><span>digi <b>${esc(st.digi)}</b></span>
+    <span>rejected <b>${st.rejected}</b></span><span>exclusions <b>${st.exclusions}</b></span><span>digi <b>${esc(st.digi)}</b></span><span>rec <b>${esc(st.rec)}</b></span>
     <span>underruns <b>${st.underruns}</b></span><span>CPU <b>${st.cpu == null ? "-" : st.cpu + "%" + (st.temp == null ? "" : " / " + st.temp + "C")}</b> · RAM <b>${st.ram_mb == null ? "-" : st.ram_mb + " MB"}</b></span>`;
 }
 
 // Each row: line 1 = frequency, mode, name; line 2 (phone) = the remaining columns with labels.
 function renderHistory() {
   $("historyList").innerHTML = S.history.length === 0 ? `<div class="empty">no detections yet</div>` :
-    `<div class="lrow head"><span>Freq</span><span>Mode</span><span>Name</span><span>Time</span><span>Dur</span><span>Max SNR</span><span>Max RSSI</span></div>` +
+    `<div class="lrow head"><span>Freq</span><span>Mode</span><span>Rec</span><span>Name</span><span>Time</span><span>Dur</span><span>Max SNR</span><span>Max RSSI</span></div>` +
     S.history.map((h, i) => `<div class="lrow" data-h="${i}">
-      <span class="f">${esc(h.label)}</span>${modeTag(h.mode)}<span class="n">${esc(h.name)}</span><span class="br"></span>
+      <span class="f">${esc(h.label)}</span>${modeTag(h.mode)}${recTag(h.rec)}<span class="n">${esc(h.name)}</span><span class="br"></span>
       <span class="c">${esc(h.time)}</span><span class="c">${esc(h.dur)}</span>
       <span class="c" data-l="SNR">${fix1(h.snr)} dB</span><span class="c">${fix1(h.rssi)} dBFS</span></div>`).join("");
 }
@@ -738,9 +748,10 @@ function renderActivity() {
   $("actCount").textContent = S.activity.length + " entries";
   const arrow = c => c === actSort.col ? (actSort.desc ? "▼" : "▲") : "↕";
   $("activityList").innerHTML = S.activity.length === 0 ? `<div class="empty">the activity log is empty</div>` :
-    `<div class="lrow head">${ACT_COLS.map(([c, t]) => `<span data-sort="${c}"${c === actSort.col ? ' class="on"' : ""}>${t}<span class="ar">${arrow(c)}</span></span>`).join("")}</div>` +
+    `<div class="lrow head">${ACT_COLS.map(([c, t]) => `<span data-sort="${c}"${c === actSort.col ? ' class="on"' : ""}>${t}<span class="ar">${arrow(c)}</span></span>` +
+      (c === "mode" ? `<span class="rh">Rec</span>` : "")).join("")}</div>` +
     actView.map((a, i) => `<div class="lrow" data-a="${i}">
-      <span class="f">${esc(a.label)}</span>${modeTag(a.mode)}<span class="n">${esc(a.name)}</span><span class="br"></span>
+      <span class="f">${esc(a.label)}</span>${modeTag(a.mode)}${recTag(a.rec)}<span class="n">${esc(a.name)}</span><span class="br"></span>
       <span class="c" data-l="total">${esc(a.total)}</span><span class="c" data-l="session">${esc(a.session)}</span>
       <span class="c" data-l="hits">${a.hits}</span><span class="c" data-l="last">${esc(a.last)}</span></div>`).join("");
 }
@@ -819,8 +830,17 @@ function openItem(t, info, activity) {
   $("itInfo").textContent = info;
   $("itName").value = t.name || "";
   $("itDigi").checked = t.mode === "DIGI";
+  $("itRec").checked = !!t.rec;
   openSheet("itemSheet");
 }
+// Recording is switched at once (saved to the channel file), without the Save button.
+$("itRec").onchange = () => {
+  if (!itTarget) return;
+  const on = $("itRec").checked;
+  if (!S.hello || !S.hello.rec) { $("itRec").checked = !on; toast("recording needs --record-dir"); return; }
+  itTarget.rec = on;
+  send({ c: "rec", freq: itTarget.freq, on });
+};
 $("activityList").onclick = e => {
   const h = e.target.closest("[data-sort]"); if (h) { setActSort(h.dataset.sort); return; }
   const it = e.target.closest("[data-a]"); if (!it) return;

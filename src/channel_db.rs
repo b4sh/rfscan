@@ -1,13 +1,13 @@
 //! Channel file: frequencies with names, mode and bandwidth.
 //!
-//! Line format: `FREQUENCY_MHz [am|nfm|fm|digi] [bw=WIDTH] ["name"]`. Mode and `bw=` in any
-//! order before the name. `#` outside quotes starts a comment. `\"` and `\\` are allowed in the
+//! Line format: `FREQUENCY_MHz [am|nfm|fm|digi] [rec] [bw=WIDTH] ["name"]`. Mode, `rec` and
+//! `bw=` in any order before the name. `#` outside quotes starts a comment. `\"` and `\\` are allowed in the
 //! name. A line that cannot be parsed produces a warning with the line number. Duplicate
 //! frequency: the first entry wins, the second produces a warning.
 //!
 //! The program writes the file only when the user names a channel or marks it `digi` in the TUI
-//! (`set_entry`): the matching entry gets the new name and mode (`bw=`, the comment and a mode
-//! other than `digi` stay), otherwise a new line is appended. The write is atomic (temporary file + rename) and keeps all other lines unchanged.
+//! (`set_entry`) or switches its audio recording (`set_rec`): the matching entry gets the new
+//! name and mode or `rec` (everything else stays), otherwise a new line is appended. The write is atomic (temporary file + rename) and keeps all other lines unchanged.
 
 use std::path::{Path, PathBuf};
 
@@ -23,6 +23,8 @@ pub struct ChannelEntry {
     pub mode: Option<Modulation>,
     pub bw: Option<u64>,
     pub name: Option<String>,
+    /// `rec`: the channel's audio is recorded (`--record-dir`).
+    pub rec: bool,
     /// Airband: the entry is written with its 25 kHz channel number (25 kHz raster).
     pub raster25: bool,
     /// The frequency as written in the file (kept when the program renames the entry).
@@ -106,6 +108,7 @@ fn parse_line(line: &str, number: usize) -> Result<Option<ChannelEntry>, String>
         mode: None,
         bw: None,
         name,
+        rec: false,
         raster25,
         freq_text: freq.to_string(),
         line: number,
@@ -116,6 +119,11 @@ fn parse_line(line: &str, number: usize) -> Result<Option<ChannelEntry>, String>
                 return Err("bw= given twice".into());
             }
             entry.bw = Some(crate::cli::parse_bw(v)?);
+        } else if w == "rec" {
+            if entry.rec {
+                return Err("rec given twice".into());
+            }
+            entry.rec = true;
         } else if let Some(m) = Modulation::parse(w) {
             if entry.mode.is_some() {
                 return Err("mode given twice".into());
@@ -123,7 +131,7 @@ fn parse_line(line: &str, number: usize) -> Result<Option<ChannelEntry>, String>
             entry.mode = Some(m);
         } else {
             return Err(format!(
-                "'{w}': unknown field (allowed: am, nfm, fm, digi, bw=..., \"name\")"
+                "'{w}': unknown field (allowed: am, nfm, fm, digi, rec, bw=..., \"name\")"
             ));
         }
     }
@@ -193,6 +201,9 @@ fn entry_line(e: &ChannelEntry, comment: Option<&str>) -> String {
         s.push(' ');
         s.push_str(&m.name().to_ascii_lowercase());
     }
+    if e.rec {
+        s.push_str(" rec");
+    }
     if let Some(bw) = e.bw {
         s.push_str(&format!(" bw={bw}"));
     }
@@ -209,8 +220,8 @@ fn entry_line(e: &ChannelEntry, comment: Option<&str>) -> String {
 
 /// Gives the channel at `freq` the name `name` (`None`: no name) and the `digi` mode or not in
 /// the file `path`: the entry nearest to `freq` within `tolerance` Hz is changed
-/// (its frequency text, `bw=` and a mode other than `digi` are kept), otherwise a new entry is
-/// appended, written as an airband channel number where it applies (`raster25`: a 25 kHz
+/// (its frequency text, `bw=`, `rec` and a mode other than `digi` are kept), otherwise a new
+/// entry is appended, written as an airband channel number where it applies (`raster25`: a 25 kHz
 /// channel). Returns the frequency of the entry that was written.
 pub fn set_entry(
     path: &Path,
@@ -220,11 +231,37 @@ pub fn set_entry(
     digi: bool,
     raster25: bool,
 ) -> Result<u64, String> {
-    let mode = |old: Option<Modulation>| match (digi, old) {
-        (true, _) => Some(Modulation::Digi),
-        (false, Some(Modulation::Digi)) => None,
-        (false, m) => m,
-    };
+    rewrite(path, freq, tolerance, raster25, |e| {
+        e.name = name.map(str::to_string);
+        e.mode = match (digi, e.mode) {
+            (true, _) => Some(Modulation::Digi),
+            (false, Some(Modulation::Digi)) => None,
+            (false, m) => m,
+        };
+    })
+}
+
+/// Switches the audio recording (`rec`) of the channel at `freq` in the file `path`, like
+/// `set_entry` (everything else in the entry stays). Returns the frequency of the entry.
+pub fn set_rec(
+    path: &Path,
+    freq: u64,
+    tolerance: f64,
+    rec: bool,
+    raster25: bool,
+) -> Result<u64, String> {
+    rewrite(path, freq, tolerance, raster25, |e| e.rec = rec)
+}
+
+/// Changes the entry nearest to `freq` within `tolerance` Hz with `change`, or appends a new
+/// entry changed the same way; all other lines stay. Atomic write (temporary file + rename).
+fn rewrite(
+    path: &Path,
+    freq: u64,
+    tolerance: f64,
+    raster25: bool,
+    change: impl Fn(&mut ChannelEntry),
+) -> Result<u64, String> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -245,11 +282,8 @@ pub fn set_entry(
                     if n == 0 && body.starts_with('\u{feff}') {
                         out.push('\u{feff}');
                     }
-                    let new = ChannelEntry {
-                        name: name.map(str::to_string),
-                        mode: mode(e.mode),
-                        ..e.clone()
-                    };
+                    let mut new = e.clone();
+                    change(&mut new);
                     out.push_str(&entry_line(&new, comment));
                     out.push_str(if ending.is_empty() { "\n" } else { ending });
                 } else {
@@ -263,15 +297,17 @@ pub fn set_entry(
             if !out.is_empty() && !out.ends_with('\n') {
                 out.push('\n');
             }
-            let e = ChannelEntry {
+            let mut e = ChannelEntry {
                 freq,
-                mode: mode(None),
+                mode: None,
                 bw: None,
-                name: name.map(str::to_string),
+                name: None,
+                rec: false,
                 raster25,
                 freq_text: crate::airband::file_text(freq, raster25),
                 line: 0,
             };
+            change(&mut e);
             out.push_str(&entry_line(&e, None));
             out.push('\n');
             freq
@@ -360,6 +396,20 @@ mod tests {
         let text2 = std::fs::read_to_string(&path).unwrap();
         assert!(text2.ends_with("\n438.800 \"DMR\"\n"), "{text2}");
         assert!(text2.contains("\n118.100 digi bw=10000\n"), "{text2}");
+        // `rec` is switched without touching the rest and kept when the entry is renamed.
+        set_rec(&path, 438_612_500, 6_250.0, true, false).unwrap();
+        set_rec(&path, 433_450_000, 6_250.0, true, false).unwrap();
+        set_entry(&path, 438_612_500, 6_250.0, Some("DMR"), true, false).unwrap();
+        let text3 = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text3.contains("\n438.6125 digi rec \"DMR\"  # repeater\n"),
+            "{text3}"
+        );
+        assert!(text3.ends_with("\n433.450 rec\n"), "{text3}");
+        set_rec(&path, 433_450_000, 6_250.0, false, false).unwrap();
+        let (e3, _) = parse_file(&std::fs::read_to_string(&path).unwrap());
+        assert!(e3.iter().any(|e| e.freq == 438_612_500 && e.rec));
+        assert!(e3.iter().any(|e| e.freq == 433_450_000 && !e.rec));
         let (e, _) = parse_file(&text);
         assert_eq!(e[0].name.as_deref(), Some("DMR \"Repeater\""));
         assert_eq!(e[0].mode, Some(Modulation::Digi));

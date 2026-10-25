@@ -32,6 +32,8 @@ const SPECTRUM_TOP_DB: f32 = 40.0;
 /// view while paused).
 const CENTER_BIG: usize = 14;
 const CENTER_SMALL: usize = 9;
+/// How long a notice replaces the key help.
+const NOTICE: Duration = Duration::from_secs(4);
 /// Width of the statistics column in a wide window.
 const STATS_W: u16 = 31;
 
@@ -171,6 +173,15 @@ pub fn draw(f: &mut Frame, app: &App) {
                 .add_modifier(Modifier::BOLD),
         ));
     }
+    if ctx.rec_writing() {
+        right.push(Span::styled(
+            " REC ",
+            Style::new()
+                .fg(Color::White)
+                .bg(Color::Red)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
     right.push(Span::styled(
         format!(" ● {label} "),
         Style::new().fg(color).add_modifier(Modifier::BOLD),
@@ -282,7 +293,7 @@ fn confirm_popup(
 fn label_popup(f: &mut Frame, area: Rect, app: &App, edit: &super::LabelEdit) {
     let (title, color, prompt, hint) = match edit.kind {
         super::EditKind::Label { .. } => (
-            " label: ".to_string(),
+            " channel: ".to_string(),
             Color::Cyan,
             "> ",
             "[Enter] save to the channel file  [Tab] digi  [Esc] cancel",
@@ -465,9 +476,10 @@ const MAIN_KEYS_SHORT: [&str; 12] = [
     "[Tab] hist",
 ];
 /// Keys while a detection history row is selected.
-const HISTORY_KEYS: [&str; 4] = [
+const HISTORY_KEYS: [&str; 5] = [
     "[↑/↓] select",
-    "[l] add label",
+    "[l] edit channel",
+    "[r] rec",
     "[x/X] exclude",
     "[Tab/Esc] back",
 ];
@@ -480,6 +492,7 @@ fn main_screen(f: &mut Frame, inner: Rect, app: &App) {
     } else {
         key_lines(width, &MAIN_KEYS, &MAIN_KEYS_SHORT)
     };
+    let keys = notice_or(app, keys);
     let progress = progress_lines(app, wide, width);
     let fixed = progress.len() + 1 + 2 + 1 + keys.len();
     let avail = inner.height as usize;
@@ -541,6 +554,21 @@ fn main_screen(f: &mut Frame, inner: Rect, app: &App) {
         dsd_console(f, area, console);
     }
     f.render_widget(Paragraph::new(keys), foot);
+}
+
+/// A fresh notice (e.g. why `[r]` did nothing) in place of the key help.
+fn notice_or(app: &App, keys: Vec<Line<'static>>) -> Vec<Line<'static>> {
+    match &app.notice {
+        Some((msg, at)) if at.elapsed() < NOTICE => {
+            let mut lines = vec![Line::from(Span::styled(
+                msg.clone(),
+                Style::new().fg(Color::LightRed),
+            ))];
+            lines.resize(keys.len().max(1), Line::from(""));
+            lines
+        }
+        _ => keys,
+    }
 }
 
 /// Window with the last DSD-FME console lines, as DSD-FME prints them (without colors).
@@ -639,8 +667,13 @@ fn progress_lines(app: &App, wide: bool, width: usize) -> Vec<Line<'static>> {
 fn stats_compact(app: &App) -> String {
     let ctx = &app.ctx;
     let s = app.status;
+    let rec = if ctx.recorder.is_some() {
+        format!("  rec:{}", ctx.rec_state())
+    } else {
+        String::new()
+    };
     format!(
-        "{:.0} MHz/s {:.0} w/s  ovf:{}  to:{}  rej:{}  excl:{}  digi:{}  CPU:{}  RAM:{}",
+        "{:.0} MHz/s {:.0} w/s  ovf:{}  to:{}  rej:{}  excl:{}  digi:{}{rec}  CPU:{}  RAM:{}",
         s.map_or(0.0, |s| s.mhz_per_s),
         s.map_or(0.0, |s| s.windows_per_s),
         s.map_or(0, |s| s.overflows),
@@ -696,9 +729,12 @@ fn stats_lines(app: &App) -> Vec<Line<'static>> {
                 s.map_or(0, |s| s.timeouts)
             ),
         ),
-        item("rejected", s.map_or(0, |s| s.rejected).to_string()),
-        item("exclusions", excl.to_string()),
+        item(
+            "rejected / excl.",
+            format!("{} / {excl}", s.map_or(0, |s| s.rejected)),
+        ),
         item("digi", digi_state(app).to_string()),
+        item("rec", ctx.rec_state().to_string()),
         item(
             "underruns",
             ctx.underruns
@@ -1122,16 +1158,23 @@ fn spectrum_lines(app: &App, sp: &Spectrum, width: usize) -> Vec<Line<'static>> 
 fn history(f: &mut Frame, area: Rect, app: &App) {
     let width = area.width as usize;
     let rows = (area.height as usize).saturating_sub(1);
-    let fixed = 8 + 2 + 9 + 2 + 4 + 2 + 2 + 5 + 2 + 6 + 2 + 6;
+    let fixed = 8 + 2 + 9 + 2 + 4 + 2 + 3 + 2 + 2 + 5 + 2 + 6 + 2 + 6;
     let name_w = width.saturating_sub(fixed).clamp(4, 30);
-    let row = |time: &str, mhz: &str, mode: &str, name: &str, snr: &str, rssi: &str, dur: &str| {
+    let row = |time: &str,
+               mhz: &str,
+               mode: &str,
+               rec: &str,
+               name: &str,
+               snr: &str,
+               rssi: &str,
+               dur: &str| {
         format!(
-            "{time:<8}  {mhz:>9}  {mode:<4}  {:<name_w$}  {snr:>5}  {rssi:>6}  {dur:>6}",
+            "{time:<8}  {mhz:>9}  {mode:<4}  {rec:<3}  {:<name_w$}  {snr:>5}  {rssi:>6}  {dur:>6}",
             fit(name, name_w)
         )
     };
     let mut lines = vec![Line::from(dim(row(
-        "time", "MHz", "mode", "name", "SNR", "RSSI", "dur.",
+        "time", "MHz", "mode", "rec", "name", "SNR", "RSSI", "dur.",
     )))];
     let sel = app
         .history_sel
@@ -1150,6 +1193,7 @@ fn history(f: &mut Frame, area: Rect, app: &App) {
                 &h.at.format("%H:%M:%S").to_string(),
                 &app.ctx.freq_label(h.freq),
                 h.mode.name(),
+                if app.ctx.rec_near(h.freq) { " ✓" } else { "" },
                 &name,
                 &format!("{:.1}", h.peak_snr_db),
                 &format!("{:.1}", h.peak_rssi_db),
@@ -1182,11 +1226,12 @@ fn selected(line: String, is_sel: bool) -> Line<'static> {
 }
 
 /// Keys of the activity screen.
-const ACTIVITY_KEYS: [&str; 9] = [
+const ACTIVITY_KEYS: [&str; 10] = [
     "[↑↓] scroll",
     "[←→] sort",
     "[s] reverse",
-    "[l] add label",
+    "[l] edit channel",
+    "[r] rec",
     "[x] exclude",
     "[d] delete",
     "[c] clear",
@@ -1197,21 +1242,22 @@ const ACTIVITY_KEYS: [&str; 9] = [
 fn activity_screen(f: &mut Frame, inner: Rect, app: &App) {
     let rows = app.activity_rows();
     let width = inner.width as usize;
-    let keys = key_lines(width, &ACTIVITY_KEYS, &ACTIVITY_KEYS);
+    let keys = notice_or(app, key_lines(width, &ACTIVITY_KEYS, &ACTIVITY_KEYS));
     let list_h = (inner.height as usize).saturating_sub(2 + keys.len());
     let name_w = width
-        .saturating_sub(4 + 10 + 2 + 5 + 2 + 2 + 9 + 2 + 9 + 2 + 6 + 2 + 16)
+        .saturating_sub(4 + 10 + 2 + 5 + 2 + 3 + 2 + 2 + 9 + 2 + 9 + 2 + 6 + 2 + 16)
         .clamp(5, 40);
     let fmt = |sel: &str,
                mhz: &str,
                mode: &str,
+               rec: &str,
                name: &str,
                total: &str,
                session: &str,
                hits: &str,
                last: &str| {
         format!(
-            "{sel:<2}{mhz:>10}  {mode:<5}  {:<name_w$}  {total:>9}  {session:>9}  {hits:>6}  {last}",
+            "{sel:<2}{mhz:>10}  {mode:<5}  {rec:<3}  {:<name_w$}  {total:>9}  {session:>9}  {hits:>6}  {last}",
             fit(name, name_w)
         )
     };
@@ -1236,6 +1282,7 @@ fn activity_screen(f: &mut Frame, inner: Rect, app: &App) {
             "",
             &head(C::Freq, "MHz"),
             &head(C::Mode, "mode"),
+            "rec",
             &head(C::Name, "name"),
             &head(C::Total, "total"),
             &head(C::Session, "session"),
@@ -1250,6 +1297,7 @@ fn activity_screen(f: &mut Frame, inner: Rect, app: &App) {
                 if i == sel { "▶" } else { "" },
                 &app.ctx.freq_label(r.freq),
                 r.mode.unwrap_or(""),
+                if r.rec { " ✓" } else { "" },
                 r.name.as_deref().unwrap_or(""),
                 &h_mm_ss(r.total),
                 &h_mm_ss(r.session),

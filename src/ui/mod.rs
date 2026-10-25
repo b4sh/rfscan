@@ -89,6 +89,10 @@ pub struct UiContext {
     pub dsd_console: Option<crate::dsd_fme::ConsoleLines>,
     /// Decoded voice from DSD-FME.
     pub voice: Option<Arc<crate::digi_voice::VoiceStats>>,
+    /// Channel file entries marked `rec`, shared with the recorder (and the other interface).
+    pub rec_list: crate::recorder::RecList,
+    /// Audio recording (`--record-dir`), `None` without it.
+    pub recorder: Option<Arc<crate::recorder::Shared>>,
 }
 
 impl UiContext {
@@ -151,6 +155,59 @@ impl UiContext {
         Ok(written)
     }
 
+    /// Whether the channel at `hz` is marked `rec` (its audio is recorded).
+    pub(crate) fn rec_near(&self, hz: u64) -> bool {
+        self.rec_list
+            .lock()
+            .is_ok_and(|l| crate::recorder::is_rec(&l, hz))
+    }
+
+    /// Sets `rec` of the channel nearest to `freq` in the channel file; the recorder sees the
+    /// change at once. Without `--record-dir` nothing changes.
+    pub(crate) fn set_rec(&self, freq: u64, on: bool) -> Result<(), String> {
+        if self.recorder.is_none() {
+            return Err("recording needs --record-dir".into());
+        }
+        let Some(path) = &self.channels_path else {
+            return Err("no channel file path (use --channels-file)".into());
+        };
+        let written = crate::channel_db::set_rec(
+            path,
+            freq,
+            NAME_TOLERANCE_HZ as f64,
+            on,
+            self.is_raster25(freq),
+        )?;
+        if let Ok(mut list) = self.rec_list.lock() {
+            list.retain(|&f| f != written);
+            if on {
+                list.push(written);
+            }
+        }
+        Ok(())
+    }
+
+    /// Recording state for the statistics: `off` (no `--record-dir`), `on`, `paused` (disk
+    /// over 90%).
+    pub(crate) fn rec_state(&self) -> &'static str {
+        match self
+            .recorder
+            .as_deref()
+            .map(|r| crate::recorder::RecState::load(&r.state))
+        {
+            None => "off",
+            Some(crate::recorder::RecState::On) => "on",
+            Some(crate::recorder::RecState::Paused) => "paused",
+        }
+    }
+
+    /// A recording is being written.
+    pub(crate) fn rec_writing(&self) -> bool {
+        self.recorder
+            .as_deref()
+            .is_some_and(|r| r.writing.load(Ordering::Relaxed))
+    }
+
     /// Updates the names shown after a channel was named (`None`: the name was removed).
     fn set_name(&mut self, freq: u64, name: Option<&str>) {
         let db = &mut self.channel_db;
@@ -187,6 +244,7 @@ impl UiContext {
                 } else {
                     e.mode.map(|m| m.name())
                 },
+                rec: self.rec_near(freq),
             })
             .collect();
         rows.sort_by(|a, b| sort.cmp(a, b));
@@ -334,7 +392,7 @@ const LABEL_MAX: usize = 40;
 /// What the text popup is for.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum EditKind {
-    /// A channel name and the `digi` mode (`[l] add label` on the activity screen and in the
+    /// A channel name and the `digi` mode (`[l] edit channel` on the activity screen and in the
     /// detection history, `[Tab]` switches `digi`), saved to the channel file; `was`: the `digi`
     /// mode when the popup opened.
     Label { digi: bool, was: bool },
@@ -446,6 +504,8 @@ struct App {
     /// A confirmation on the activity screen (`[c] clear`, `[d] delete`), with an error if
     /// saving failed.
     confirm: Option<(ConfirmAction, Option<String>)>,
+    /// A message shown for a few seconds instead of the key help (e.g. why `[r]` did nothing).
+    notice: Option<(String, Instant)>,
 }
 
 /// Runs the TUI until the scanner finishes (the event channel closes).
@@ -471,6 +531,7 @@ pub fn run(
         cpu: CpuMeter::new(),
         edit: None,
         confirm: None,
+        notice: None,
     };
     let result = event_loop(&mut terminal, &mut app, &events, &commands);
     ratatui::restore();
@@ -636,6 +697,16 @@ impl App {
                     }
                     None
                 }
+                KeyCode::Char('r') => {
+                    if let Some(freq) = self
+                        .history_sel
+                        .and_then(|s| self.history.get(s))
+                        .map(|h| h.freq)
+                    {
+                        self.toggle_rec(freq);
+                    }
+                    None
+                }
                 _ => {
                     if let Some(sel) = &mut self.history_sel {
                         scroll(sel, self.history.len(), code);
@@ -675,6 +746,11 @@ impl App {
                             self.open_label(r.freq);
                         }
                     }
+                    KeyCode::Char('r') => {
+                        if let Some(r) = rows.get(self.activity_sel) {
+                            self.toggle_rec(r.freq);
+                        }
+                    }
                     _ => scroll(&mut self.activity_sel, rows.len(), code),
                 }
                 None
@@ -711,6 +787,13 @@ impl App {
                 }
                 None
             }
+        }
+    }
+
+    /// Switches the recording of `freq` (`[r]`); an error is shown instead of the key help.
+    fn toggle_rec(&mut self, freq: u64) {
+        if let Err(e) = self.ctx.set_rec(freq, !self.ctx.rec_near(freq)) {
+            self.notice = Some((e, Instant::now()));
         }
     }
 
@@ -855,6 +938,8 @@ pub(crate) struct ActivityRow {
     /// Mode shown: `DIGI` for a digi channel file entry, otherwise the mode of the last
     /// activity (older log lines have none).
     pub(crate) mode: Option<&'static str>,
+    /// Marked `rec` in the channel file.
+    pub(crate) rec: bool,
 }
 
 /// Moves a list selection with the arrow, page and home/end keys.
@@ -944,6 +1029,8 @@ mod tests {
             dsd: None,
             dsd_console: None,
             voice: None,
+            rec_list: Arc::new(Mutex::new(vec![433_375_000])),
+            recorder: None,
         };
         let mut a = App {
             ctx,
@@ -964,6 +1051,7 @@ mod tests {
             },
             edit: None,
             confirm: None,
+            notice: None,
         };
         a.apply(UiEvent::Status(Status {
             state: ScanState::Scanning,
@@ -1065,7 +1153,7 @@ mod tests {
         paused.edit_key(KeyCode::Tab);
         let pop = render(&paused, 100, 30);
         println!("{pop}\n");
-        assert!(pop.contains("label: 145.500 MHz") && pop.contains("> CALLING"));
+        assert!(pop.contains("channel: 145.500 MHz") && pop.contains("> CALLING"));
         assert!(pop.contains("digi: [x]") && pop.contains("[Tab] digi"));
         paused.edit = None;
         paused.confirm = Some((ConfirmAction::Clear, None));
@@ -1347,7 +1435,7 @@ mod tests {
             "{screen}
 "
         );
-        assert!(screen.contains("[l] add label"));
+        assert!(screen.contains("[l] edit channel"));
         a.apply(UiEvent::History(crate::events::HistoryItem {
             at: chrono::Local::now(),
             channel: 1,
@@ -1379,5 +1467,22 @@ mod tests {
         assert_eq!(a.history_sel, None);
         a.key(KeyCode::Char('l'));
         assert!(a.edit.is_none());
+    }
+
+    /// A channel marked `rec` has the check mark; without `--record-dir`, `[r]` changes
+    /// nothing and says why instead of the key help.
+    #[test]
+    fn rec_mark_and_notice() {
+        let mut a = app();
+        let screen = render(&a, 100, 30);
+        let row = |s: &str, f: &str| s.lines().find(|l| l.contains(f)).map(str::to_string);
+        assert!(row(&screen, "433.375").is_some_and(|l| l.contains('✓')));
+        assert!(row(&screen, "145.500").is_some_and(|l| !l.contains('✓')));
+        a.key(KeyCode::Tab);
+        a.key(KeyCode::Char('r'));
+        let screen = render(&a, 100, 30);
+        println!("{screen}\n");
+        assert!(screen.contains("recording needs --record-dir"));
+        assert!(a.ctx.rec_near(433_375_000));
     }
 }

@@ -5,8 +5,8 @@
 //! of an activity. An underrun during activity (empty buffer while the DSP thread is playing) is
 //! counted and replaced with silence. The decoded voice from DSD-FME comes in a second
 //! buffer and is added to every channel; the sum goes through a soft limiter. The mono mix also
-//! goes to the web GUI. With `--local-audio off` a thread with its own clock drains
-//! the buffers instead of the sound card.
+//! goes to the web GUI, and the frames with audio to the recordings. With `--local-audio off` a
+//! thread with its own clock drains the buffers instead of the sound card.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -79,6 +79,9 @@ struct Mixer {
     vprimed: bool,
     /// Mono mix for the web GUI; samples are dropped when it is full.
     web: Option<rtrb::Producer<f32>>,
+    /// Mono mix for the recordings (`--record-dir`): only frames with audio (analog or decoded
+    /// voice), so the silence between them, e.g. in the Hang state, is not recorded.
+    rec: Option<rtrb::Producer<f32>>,
 }
 
 impl Mixer {
@@ -124,7 +127,8 @@ impl Mixer {
             let (v1, v2) = decoded.as_ref().map_or((empty, empty), |c| c.as_slices());
             let mut a = a1.iter().chain(a2);
             let mut v = v1.iter().chain(v2);
-            for frame in data.chunks_mut(channels) {
+            let analog_frames = n / channels;
+            for (i, frame) in data.chunks_mut(channels).enumerate() {
                 let vs = v.next().copied().unwrap_or(0.0);
                 let mut mono = None;
                 for d in frame {
@@ -134,6 +138,11 @@ impl Mixer {
                 }
                 if let Some(w) = &mut self.web {
                     let _ = w.push(mono.unwrap_or(0.0));
+                }
+                if let Some(r) = &mut self.rec
+                    && (i < analog_frames || i < vn)
+                {
+                    let _ = r.push(mono.unwrap_or(0.0));
                 }
             }
         }
@@ -301,8 +310,9 @@ fn find_device(host: &cpal::Host, wanted: Option<&str>) -> Result<(cpal::Device,
     }
 }
 
-/// Web GUI tap capacity in seconds (drained every few tens of ms).
+/// Web GUI and recording tap capacity in seconds (drained every few tens of ms).
 const WEB_TAP_S: f64 = 0.5;
+const REC_TAP_S: f64 = 1.0;
 
 /// The audio output with its buffers.
 pub struct Opened {
@@ -313,13 +323,16 @@ pub struct Opened {
     pub voice: rtrb::Producer<f32>,
     /// The mono mix at the output rate for the web GUI (with `web`).
     pub web: Option<rtrb::Consumer<f32>>,
+    /// The mono mix at the output rate for the recordings, only frames with audio (with `rec`).
+    pub rec: Option<rtrb::Consumer<f32>>,
 }
 
 impl AudioOut {
     /// Opens the audio output (`wanted`: a name or a part of it; without a name the system
     /// default output). `local`: false plays nothing and drives the mixer by the clock
-    /// (`--local-audio off`); `web`: also returns the mono mix for the web GUI.
-    pub fn open(wanted: Option<&str>, local: bool, web: bool) -> Result<Opened, String> {
+    /// (`--local-audio off`); `web`: also returns the mono mix for the web GUI; `rec`: also
+    /// returns the mono mix for the recordings.
+    pub fn open(wanted: Option<&str>, local: bool, web: bool, rec: bool) -> Result<Opened, String> {
         let output = if local {
             let host = cpal::default_host();
             let (device, name) = find_device(&host, wanted)?;
@@ -347,6 +360,12 @@ impl AudioOut {
         } else {
             (None, None)
         };
+        let (rec_tx, rec_rx) = if rec {
+            let (t, r) = rtrb::RingBuffer::new(((REC_TAP_S * rate) as usize).max(1));
+            (Some(t), Some(r))
+        } else {
+            (None, None)
+        };
         let underruns = Arc::new(AtomicU64::new(0));
         let active = Arc::new(AtomicBool::new(false));
         let muted = Arc::new(AtomicBool::new(false));
@@ -367,6 +386,7 @@ impl AudioOut {
             primed: false,
             vprimed: false,
             web: web_tx,
+            rec: rec_tx,
         };
         let (stream, clock) = match output {
             Some((device, _, supported)) => {
@@ -399,6 +419,7 @@ impl AudioOut {
             audio: tx,
             voice: vtx,
             web: web_rx,
+            rec: rec_rx,
         })
     }
 }
