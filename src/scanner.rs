@@ -591,6 +591,24 @@ pub fn run(
                 Command::RecordingDeleted(path) => {
                     logev!(log, Level::Info, now, "REC DEL   {}", path.display());
                 }
+                Command::RecordingsDeleted {
+                    dir,
+                    files,
+                    skipped,
+                } => {
+                    logev!(
+                        log,
+                        Level::Info,
+                        now,
+                        "REC DEL   all in {}: {files} file(s){}",
+                        dir.display(),
+                        if skipped > 0 {
+                            format!(", {skipped} being recorded kept")
+                        } else {
+                            String::new()
+                        }
+                    );
+                }
                 Command::Squelch(delta) => {
                     cfg.squelch_snr = (cfg.squelch_snr + delta).max(0.0);
                     logev!(

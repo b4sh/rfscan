@@ -469,16 +469,26 @@ enum ClientMsg {
         note: Option<String>,
     },
     Activity,
-    /// The channels with recordings.
-    Recordings,
-    /// The files of one channel.
+    /// The channels with recordings; `refresh` (the tab opened) reads the directory first.
+    Recordings {
+        #[serde(default)]
+        refresh: bool,
+    },
+    /// The files of one channel; `refresh` as above.
     RecFiles {
         channel: u64,
+        #[serde(default)]
+        refresh: bool,
     },
     /// Delete a recording; the reply is the files of its channel.
     RecDelete {
         id: u64,
         channel: u64,
+    },
+    /// Delete all the recordings, or those of one channel; the reply is the channels, or the
+    /// files of the channel.
+    RecDeleteAll {
+        channel: Option<u64>,
     },
 }
 
@@ -603,8 +613,32 @@ fn handle(hub: &Hub, cmd: ClientMsg) -> Option<Value> {
             send(Command::SetExclusionNote { freq, note });
         }
         ClientMsg::Activity => return Some(activity_json(&ctx)),
-        ClientMsg::Recordings => return Some(recordings_json(&ctx)),
-        ClientMsg::RecFiles { channel } => return Some(rec_files_json(&ctx, channel)),
+        ClientMsg::Recordings { refresh } => {
+            if refresh {
+                ctx.refresh_recordings();
+            }
+            return Some(recordings_json(&ctx));
+        }
+        ClientMsg::RecFiles { channel, refresh } => {
+            if refresh {
+                ctx.refresh_recordings();
+            }
+            return Some(rec_files_json(&ctx, channel));
+        }
+        ClientMsg::RecDeleteAll { channel } => {
+            let error = match ctx.delete_all_recordings(channel) {
+                Ok((log, error)) => {
+                    send(log);
+                    error
+                }
+                Err(e) => Some(e),
+            };
+            return Some(match (error, channel) {
+                (Some(e), _) => error_json(&e),
+                (None, None) => recordings_json(&ctx),
+                (None, Some(ch)) => rec_files_json(&ctx, ch),
+            });
+        }
         ClientMsg::RecDelete { id, channel } => match ctx.delete_recording(id) {
             Ok(path) => {
                 send(Command::RecordingDeleted(path));

@@ -290,6 +290,33 @@ fn confirm_popup(
                 "The file will be deleted from the disk.".to_string(),
             )
         }
+        super::ConfirmAction::DeleteAllRecordings(ch) => {
+            let chans = app.ctx.rec_channels();
+            let (title, count) = match ch.and_then(|ch| chans.iter().find(|c| c.id == ch)) {
+                Some(c) => (
+                    format!(
+                        " delete all recordings of {} MHz{} ",
+                        c.label,
+                        c.name
+                            .as_deref()
+                            .map(|n| format!(" {n}"))
+                            .unwrap_or_default()
+                    ),
+                    c.count,
+                ),
+                None => (
+                    " delete all recordings ".to_string(),
+                    chans.iter().map(|c| c.count).sum(),
+                ),
+            };
+            (
+                title,
+                format!(
+                    "{} will be deleted from the disk (not the one being recorded).",
+                    plural(count, "file", "files")
+                ),
+            )
+        }
         super::ConfirmAction::Delete(freq) => {
             let name = app
                 .ctx
@@ -1367,11 +1394,18 @@ fn activity_screen(f: &mut Frame, inner: Rect, app: &App) {
     f.render_widget(Paragraph::new(keys), keys_area);
 }
 
-const REC_CHANNEL_KEYS: [&str; 4] = ["[↑↓] scroll", "[Enter] files", "[w/Esc] back", "[q] quit"];
-const REC_FILE_KEYS: [&str; 5] = [
+const REC_CHANNEL_KEYS: [&str; 5] = [
+    "[↑↓] scroll",
+    "[Enter] files",
+    "[D] delete all",
+    "[w/Esc] back",
+    "[q] quit",
+];
+const REC_FILE_KEYS: [&str; 6] = [
     "[↑↓] scroll",
     "[Enter] play / stop",
     "[d] delete",
+    "[D] delete all",
     "[Esc] channels",
     "[q] quit",
 ];

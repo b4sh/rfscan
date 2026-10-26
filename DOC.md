@@ -262,11 +262,11 @@ records the audio of the channels marked `rec` in the [channel file](#channel-fi
 - **Files.** One WAV file per transmission, named by its local start time, e.g. `20261025-143012.wav`. A return of the signal during the pause (`--pause`) continues the same file, and the silence of the pause is not recorded. The format is the audio of the web GUI: 8 kHz mono G.711 μ-law (about 29 MB per hour of audio) after the 300-3000 Hz filter, with the noise reduction, and on `digi` channels the voice decoded by DSD-FME. It plays in common players (Windows, VLC, Audacity).
 - **Safety.** The file is written by a thread of its own, so a slow disk never slows down scanning. Its header is updated every few seconds, so a file left by a crash or a power cut still plays. When the disk of `--record-dir` is more than 90% full, rfscan closes the file, pauses recording with a warning and resumes by itself when the usage drops below 90%; the `rec` statistic shows `off` (no `--record-dir`), `on` or `paused`.
 
-**Listening and deleting.** The recordings are listed per channel: the **Recordings** tab of the web GUI and `w` in the TUI show the channels (newest recording first), and a channel shows its files (at most the newest 500; older ones stay on the disk). The list is read at startup, and every new recording appears in it at once.
+**Listening and deleting.** The recordings are listed per channel: the **Recordings** tab of the web GUI and `w` in the TUI show the channels (newest recording first), and a channel shows its files (at most the newest 500; older ones stay on the disk). The list is read at startup, and every new recording appears in it at once. The directory is read again when the tab or screen is opened and every 60 s, so files deleted or added outside rfscan (e.g. in a file manager) leave or join the list.
 
-- In the web GUI **▶ play** plays a file in the browser (independent of the scanner audio), **✕ del** deletes it after a confirmation.
-- In the TUI `Enter` on a channel shows its files, `Enter` on a file plays or stops it on the local audio output, `d` deletes it after a confirmation, `Esc` goes back. While a file plays, the scanner audio is muted (scanning and recording go on) and `▶ PLAY` is shown in the header; with `--local-audio off` there is no local output and the TUI only says so.
-- Only files inside `--record-dir` can be deleted, never the one being recorded; a channel subdirectory left empty is removed.
+- In the web GUI **▶ play** plays a file in the browser (independent of the scanner audio), **✕ del** deletes it after a confirmation. The red **Delete all** button in the header deletes, after a confirmation, all the recordings, or on a channel's file list all the recordings of that channel.
+- In the TUI `Enter` on a channel shows its files, `Enter` on a file plays or stops it on the local audio output, `d` deletes it after a confirmation, `D` deletes all the recordings (on the channel list) or all the recordings of the channel (on the file list) after a confirmation, `Esc` goes back. While a file plays, the scanner audio is muted (scanning and recording go on) and `▶ PLAY` is shown in the header; with `--local-audio off` there is no local output and the TUI only says so.
+- Only files inside `--record-dir` can be deleted, never the one being recorded; a channel subdirectory left empty is removed. Delete all skips the file being recorded and leaves other files and `--record-dir` itself in place. The log has a `REC DEL` line for each deleted file, and for Delete all one line with the directory and the number of deleted files.
 
 ## TUI
 
@@ -284,7 +284,7 @@ When the output is a terminal, rfscan runs with the TUI. The layout adapts to th
 | `n`, `<` / `>` | noise reduction on/off, strength |
 | `a` | activity screen (`←` / `→` sort column, `s` reverse the order, `l` name a channel, `Tab` in the popup: `digi`, `r` record its audio on/off, `x` exclude, `d` delete the entry, `c` clear) |
 | `e` | exclusions screen (`Enter` edit the note, `d` remove, `s` keep a timed exclusion for good) |
-| `w` | recordings screen, with `--record-dir` (`Enter` a channel's files, `Enter` play / stop a file, `d` delete it, `Esc` back) |
+| `w` | recordings screen, with `--record-dir` (`Enter` a channel's files, `Enter` play / stop a file, `d` delete it, `D` delete all, `Esc` back) |
 | `Tab` | select a detection history row (arrows move, `l` name the channel, `r` record its audio on/off, `x` / `X` exclude it (with adjacent channels), `Tab` / `Esc` back) |
 
 ## Console mode and log file

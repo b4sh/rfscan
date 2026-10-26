@@ -855,11 +855,15 @@ fn run_scan(cli: &Cli, src: &mut SoapySource, rate: f64, log: &mut Log) -> anyho
             .map(|(entries, _)| entries.iter().filter(|e| e.rec).map(|e| e.freq).collect())
             .unwrap_or_default(),
     ));
-    // The list of recordings (read once) and their playback on the local output.
+    // The list of recordings (read again now and then) and their playback on the local output.
     let library = cli
         .record_dir
         .as_deref()
         .map(|d| Arc::new(Mutex::new(recordings::Library::scan(d))));
+    let _refresher = match &library {
+        Some(lib) => Some(recordings::Refresher::start(lib.clone()).map_err(anyhow::Error::msg)?),
+        None => None,
+    };
     let player = match playback_tx {
         Some(ring) => Some(Arc::new(
             recordings::Player::start(ring, out.playback_active.clone(), out.rate)

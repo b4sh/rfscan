@@ -1,11 +1,12 @@
 //! The recordings of `--record-dir`: the list per channel, deleting, and playback in the TUI.
 //!
 //! The list is built at startup by reading the channel subdirectories and their `.wav` files;
-//! the recorder adds every file it closes, so the directory is not read again. Channels are the
-//! frequencies of the subdirectory names (`145.550-Name`, in the airband the channel number), so
-//! the subdirectories of a renamed channel are one channel. Deleting accepts only files of the
-//! list (identifiers, never paths from outside), never the file being recorded, and removes a
-//! channel subdirectory that became empty.
+//! the recorder adds every file it closes. The directory is read again when the recordings are
+//! opened and every `REFRESH` (files deleted or added outside rfscan); listed files keep their
+//! identifiers. Channels are the frequencies of the subdirectory names (`145.550-Name`, in the
+//! airband the channel number), so the subdirectories of a renamed channel are one channel.
+//! Deleting accepts only files of the list (identifiers, never paths from outside), never the
+//! file being recorded, and removes a channel subdirectory that became empty.
 //!
 //! Playback (TUI): a thread of its own decodes the μ-law file, resamples it to the audio output
 //! rate and feeds a ring buffer that the mixer plays instead of the scanner audio while
@@ -28,6 +29,8 @@ use crate::web::{ANTI_ALIAS, MULAW_RATE};
 pub const LIST_MAX: usize = 500;
 /// Header length of the files written by the recorder (`recorder::header`).
 const HEADER_LEN: usize = 58;
+/// How often the directory is read again.
+const REFRESH: Duration = Duration::from_secs(60);
 
 /// One recording.
 #[derive(Clone, Debug)]
@@ -85,6 +88,18 @@ pub struct Library {
 
 pub type SharedLibrary = Arc<Mutex<Library>>;
 
+/// The result of deleting all the recordings (or those of one channel).
+#[derive(Debug, Default)]
+pub struct Deleted {
+    /// `--record-dir`, or the newest subdirectory of the channel.
+    pub dir: PathBuf,
+    pub files: usize,
+    /// The file being recorded, which stays.
+    pub skipped: usize,
+    /// The first file that could not be deleted (it stays in the list).
+    pub error: Option<String>,
+}
+
 /// Frequency of a subdirectory name: the number before the first `-` (an airband value with
 /// three decimal places is a channel number).
 fn dir_freq(name: &str) -> Option<(u64, bool)> {
@@ -122,6 +137,24 @@ fn is_wav(path: &Path) -> bool {
         .is_some_and(|e| e.eq_ignore_ascii_case("wav"))
 }
 
+/// The `.wav` files of the subdirectories of `root`, the oldest first (so the newest
+/// subdirectory name of a channel wins).
+fn wav_paths(root: &Path) -> Vec<PathBuf> {
+    let Ok(dirs) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<PathBuf> = dirs
+        .flatten()
+        .map(|d| d.path())
+        .filter(|p| p.is_dir())
+        .flat_map(|d| std::fs::read_dir(d).into_iter().flatten().flatten())
+        .map(|f| f.path())
+        .filter(|p| p.is_file() && is_wav(p))
+        .collect();
+    paths.sort_by_key(|p| file_time(p));
+    paths
+}
+
 impl Library {
     /// Reads the channel subdirectories of `root` and their `.wav` files.
     pub fn scan(root: &Path) -> Self {
@@ -131,27 +164,56 @@ impl Library {
             next_id: 1,
             writing: None,
         };
-        let Ok(dirs) = std::fs::read_dir(root) else {
-            return lib;
-        };
-        let mut paths: Vec<PathBuf> = dirs
-            .flatten()
-            .map(|d| d.path())
-            .filter(|p| p.is_dir())
-            .flat_map(|d| std::fs::read_dir(d).into_iter().flatten().flatten())
-            .map(|f| f.path())
-            .filter(|p| p.is_file() && is_wav(p))
-            .collect();
-        // Oldest first, so the newest subdirectory name of a channel wins.
-        paths.sort_by_key(|p| file_time(p));
-        for p in paths {
+        for p in wav_paths(root) {
             lib.add(&p);
         }
         lib
     }
 
-    /// Adds a file (a closed recording); ignored outside the channel subdirectories.
+    /// Reads the directory again: files gone from the disk leave the list, new ones join it.
+    /// The directory is read without holding the lock.
+    pub fn refresh(lib: &SharedLibrary) {
+        let Some(root) = lib.lock().ok().map(|l| l.root.clone()) else {
+            return;
+        };
+        let paths = wav_paths(&root);
+        let Ok(mut l) = lib.lock() else { return };
+        let on_disk: std::collections::HashSet<&Path> =
+            paths.iter().map(PathBuf::as_path).collect();
+        for ch in &mut l.channels {
+            ch.files.retain(|f| on_disk.contains(f.path.as_path()));
+            if let Some(name) = ch.files.first().and_then(|f| f.path.parent()?.file_name()) {
+                ch.dir_name = name.to_string_lossy().into_owned();
+            }
+        }
+        l.channels.retain(|c| !c.files.is_empty());
+        // A file deleted in rfscan after the directory was read does not come back.
+        for p in &paths {
+            if !l.listed(p) && p.is_file() {
+                l.add(p);
+            }
+        }
+    }
+
+    fn listed(&self, path: &Path) -> bool {
+        self.channels
+            .iter()
+            .any(|c| c.files.iter().any(|f| f.path == path))
+    }
+
+    /// Adds a file (a closed recording, or one found on the disk); ignored outside the channel
+    /// subdirectories. A listed file only gets its length and size updated.
     pub fn add(&mut self, path: &Path) {
+        if let Some(f) = self
+            .channels
+            .iter_mut()
+            .flat_map(|c| c.files.iter_mut())
+            .find(|f| f.path == path)
+        {
+            f.seconds = wav_seconds(path);
+            f.bytes = std::fs::metadata(path).map_or(0, |m| m.len());
+            return;
+        }
         let Some(dir) = path.parent() else { return };
         if dir.parent() != Some(self.root.as_path()) && !same_dir(dir.parent(), &self.root) {
             return;
@@ -253,6 +315,74 @@ impl Library {
             self.channels.remove(ci);
         }
         Ok(path)
+    }
+
+    /// Deletes all the files of a channel, or of all the channels with `None`, except the one
+    /// being recorded; empty subdirectories are removed. A file that cannot be deleted stays in
+    /// the list and the others are deleted.
+    pub fn delete_all(&mut self, channel: Option<u64>) -> Deleted {
+        let mut done = Deleted {
+            dir: match channel {
+                None => self.root.clone(),
+                Some(ch) => self
+                    .channel(ch)
+                    .map_or_else(|| self.root.clone(), |c| self.root.join(&c.dir_name)),
+            },
+            ..Deleted::default()
+        };
+        let ids: Vec<u64> = self
+            .channels
+            .iter()
+            .filter(|c| channel.is_none_or(|ch| c.id == ch))
+            .flat_map(|c| c.files.iter().map(|f| f.id))
+            .collect();
+        for id in ids {
+            if self.file(id).map(|f| f.path.as_path()) == self.writing.as_deref() {
+                done.skipped += 1;
+                continue;
+            }
+            match self.delete(id) {
+                Ok(_) => done.files += 1,
+                Err(e) => {
+                    done.error.get_or_insert(e);
+                }
+            }
+        }
+        done
+    }
+}
+
+/// Reads the directory of the recordings again every `REFRESH`.
+pub struct Refresher {
+    stop: Option<Sender<()>>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl Refresher {
+    pub fn start(lib: SharedLibrary) -> Result<Self, String> {
+        let (stop, rx) = crossbeam_channel::bounded::<()>(1);
+        let thread = std::thread::Builder::new()
+            .name("rfscan-recordings".into())
+            .spawn(move || {
+                while let Err(RecvTimeoutError::Timeout) = rx.recv_timeout(REFRESH) {
+                    Library::refresh(&lib);
+                }
+            })
+            .map_err(|e| format!("cannot start the recordings thread: {e}"))?;
+        Ok(Refresher {
+            stop: Some(stop),
+            thread: Some(thread),
+        })
+    }
+}
+
+impl Drop for Refresher {
+    fn drop(&mut self) {
+        // Closing the channel ends the thread.
+        drop(self.stop.take());
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
     }
 }
 
@@ -486,6 +616,55 @@ mod tests {
         write_wav(&root.join("118.010-TWR/20261025-130000.wav"), 800);
         lib.add(&root.join("118.010-TWR/20261025-130000.wav"));
         assert_eq!(lib.channels()[0].freq, Some(118_008_333));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Reading the directory again follows files deleted and added outside rfscan and keeps
+    /// the identifiers; deleting all skips the file being recorded.
+    #[test]
+    fn refresh_and_delete_all() {
+        let root = std::env::temp_dir().join(format!("rfscan-rec-all-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for d in ["145.550-A", "118.010-TWR"] {
+            std::fs::create_dir_all(root.join(d)).unwrap();
+        }
+        let a1 = root.join("145.550-A/20261020-100000.wav");
+        let a2 = root.join("145.550-A/20261021-100000.wav");
+        let twr = root.join("118.010-TWR/20261022-100000.wav");
+        for p in [&a1, &a2, &twr] {
+            write_wav(p, 800);
+        }
+        let lib: SharedLibrary = Arc::new(Mutex::new(Library::scan(&root)));
+        let id_a2 = lib.lock().unwrap().channels()[1].files[0].id;
+        std::fs::remove_file(&a1).unwrap();
+        let added = root.join("145.550-A/20261023-100000.wav");
+        write_wav(&added, 800);
+        Library::refresh(&lib);
+        {
+            let l = lib.lock().unwrap();
+            let a = l.channels()[0];
+            assert_eq!(a.freq, Some(145_550_000));
+            assert_eq!(a.files.len(), 2);
+            assert_eq!(a.files[1].id, id_a2);
+            assert_eq!(a.files[0].path, added);
+        }
+        // One channel, the file being recorded stays.
+        let mut l = lib.lock().unwrap();
+        let ch = l.channels()[0].id;
+        l.writing = Some(added.clone());
+        let done = l.delete_all(Some(ch));
+        assert_eq!((done.files, done.skipped), (1, 1));
+        assert!(added.exists() && !a2.exists() && twr.exists());
+        // All channels.
+        l.writing = None;
+        let done = l.delete_all(None);
+        assert_eq!(
+            (done.files, done.skipped, done.dir.as_path()),
+            (2, 0, root.as_path())
+        );
+        assert!(l.channels().is_empty());
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
+        drop(l);
         std::fs::remove_dir_all(&root).unwrap();
     }
 

@@ -393,7 +393,7 @@ body.nolocal #bAudio { grid-column: 1 / -1; }
       </div>
 
       <div class="listpane" id="pane-recs">
-        <div class="listhead"><h2 id="recTitle">Recordings</h2><span class="stats" id="recCount"></span><button class="smallbtn" id="recBack" hidden>◀ Channels</button></div>
+        <div class="listhead"><h2 id="recTitle">Recordings</h2><span class="stats" id="recCount"></span><button class="smallbtn warn" id="recDelAll" hidden>Delete all</button><button class="smallbtn" id="recBack" hidden>◀ Channels</button></div>
         <div id="recList"></div>
       </div>
     </section>
@@ -526,7 +526,10 @@ function connect() {
       case "recordings": S.recs = m.items; renderRecs(); break;
       case "rec_files":
         // The last file of the channel was deleted: back to the channels.
-        if (m.items.length === 0) { S.recFiles = null; send({ c: "recordings" }); }
+        if (m.items.length === 0) {
+          if (recView === m.channel) recView = null;
+          S.recFiles = null; send({ c: "recordings" });
+        }
         else if (recView === m.channel) S.recFiles = m;
         renderRecs(); break;
       case "error": toast(m.msg); break;
@@ -808,6 +811,7 @@ let recView = null;  // the channel whose files are shown
 function renderRecs() {
   const files = recView !== null && S.recFiles && S.recFiles.channel === recView ? S.recFiles : null;
   $("recBack").hidden = recView === null;
+  $("recDelAll").hidden = recView === null ? S.recs.length === 0 : !files || files.items.length === 0;
   if (recView === null) {
     $("recTitle").textContent = "Recordings";
     $("recCount").textContent = plural(S.recs.length, "channel", "channels");
@@ -835,6 +839,15 @@ function openRecChannel(id) {
   send({ c: "rec_files", channel: id });
 }
 $("recBack").onclick = () => { recView = null; S.recFiles = null; renderRecs(); send({ c: "recordings" }); };
+$("recDelAll").onclick = () => {
+  const ch = recView, files = ch !== null && S.recFiles && S.recFiles.channel === ch ? S.recFiles : null;
+  const n = files ? files.count : S.recs.reduce((s, c) => s + c.count, 0);
+  const what = files ? `all recordings of ${files.label} ${files.name || ""}` : "all recordings";
+  confirmBox(`Delete ${what.trim()}?`, `${plural(n, "file is", "files are")} deleted from the disk (not the one being recorded). This cannot be undone.`, () => {
+    if (Play_.id !== null && (ch === null || (files && files.items.some(f => f.id === Play_.id)))) Play_.stop();
+    send({ c: "rec_delete_all", channel: ch });
+  });
+};
 $("recList").onclick = e => {
   const c = e.target.closest("[data-rc]"); if (c) { openRecChannel(+c.dataset.rc); return; }
   const p = e.target.closest("[data-play]"); if (p) { Play_.toggle(+p.dataset.play); return; }
@@ -907,12 +920,13 @@ function setTab(t) {
   document.querySelectorAll("nav.tabs button").forEach(b => b.classList.toggle("active", b.dataset.t === t));
   document.querySelectorAll(".listtabs button").forEach(b => b.classList.toggle("active", b.dataset.l === document.body.dataset.list));
   if (document.body.dataset.list === "activity") send({ c: "activity" });
-  if (document.body.dataset.list === "recs") refreshRecs();
+  if (document.body.dataset.list === "recs") refreshRecs(true);
 }
-// The recordings are not pushed either: asked for while visible (new recordings appear).
-function refreshRecs() {
-  if (recView === null) send({ c: "recordings" });
-  else send({ c: "rec_files", channel: recView });
+// The recordings are not pushed either: asked for while visible (new recordings appear). On
+// opening the tab rfscan reads the directory again (files deleted outside rfscan).
+function refreshRecs(refresh = false) {
+  if (recView === null) send({ c: "recordings", refresh });
+  else send({ c: "rec_files", channel: recView, refresh });
 }
 function recsVisible() {
   const wide = matchMedia("(min-width: 960px) and (orientation: landscape)").matches;

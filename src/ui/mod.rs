@@ -352,6 +352,44 @@ impl UiContext {
         }
     }
 
+    /// Deletes all the recordings, or those of one channel (stops the playback first). Returns
+    /// the command that logs it and the error of a file that could not be deleted, if any.
+    pub(crate) fn delete_all_recordings(
+        &self,
+        channel: Option<u64>,
+    ) -> Result<(Command, Option<String>), String> {
+        let lib = self
+            .recordings
+            .as_ref()
+            .ok_or_else(|| "recording needs --record-dir".to_string())?;
+        let mut lib = lib
+            .lock()
+            .map_err(|_| "the recordings are not available".to_string())?;
+        if let Some(p) = &self.player
+            && let Some(id) = p.playing()
+            && channel.is_none_or(|ch| {
+                lib.channel(ch)
+                    .is_some_and(|c| c.files.iter().any(|f| f.id == id))
+            })
+        {
+            p.stop();
+        }
+        let done = lib.delete_all(channel);
+        let cmd = Command::RecordingsDeleted {
+            dir: done.dir,
+            files: done.files,
+            skipped: done.skipped,
+        };
+        Ok((cmd, done.error))
+    }
+
+    /// Reads the directory of the recordings again (when the recordings are opened).
+    pub(crate) fn refresh_recordings(&self) {
+        if let Some(lib) = &self.recordings {
+            crate::recordings::Library::refresh(lib);
+        }
+    }
+
     /// The exclusion list: timed entries, then the file entries with their notes.
     pub(crate) fn exclusion_list(&self) -> Vec<crate::exclusions::Item> {
         self.exclusions
@@ -463,6 +501,8 @@ pub(crate) enum ConfirmAction {
     Delete(u64),
     /// `[d] delete` on the recordings screen: delete this file.
     DeleteRecording(u64),
+    /// `[D] delete all` on the recordings screen: all the files, or those of this channel.
+    DeleteAllRecordings(Option<u64>),
 }
 
 /// Matching tolerance of channel file names on the activity and exclusions screens.
@@ -782,6 +822,7 @@ impl App {
                     None
                 }
                 KeyCode::Char('w') if self.ctx.recordings.is_some() => {
+                    self.ctx.refresh_recordings();
                     self.screen = Screen::Recordings;
                     self.rec_channel = None;
                     None
@@ -906,6 +947,10 @@ impl App {
                                     self.rec_file_sel = 0;
                                 }
                             }
+                            KeyCode::Char('D') if !chans.is_empty() => {
+                                self.confirm =
+                                    Some((ConfirmAction::DeleteAllRecordings(None), None));
+                            }
                             _ => scroll(&mut self.rec_sel, chans.len(), code),
                         }
                     }
@@ -923,6 +968,10 @@ impl App {
                                     self.confirm =
                                         Some((ConfirmAction::DeleteRecording(f.id), None));
                                 }
+                            }
+                            KeyCode::Char('D') if !files.is_empty() => {
+                                self.confirm =
+                                    Some((ConfirmAction::DeleteAllRecordings(Some(ch)), None));
                             }
                             _ => scroll(&mut self.rec_file_sel, files.len(), code),
                         }
@@ -974,7 +1023,7 @@ impl App {
     }
 
     /// A key in the confirmation: `y` clears the activity log, deletes the entry and saves the
-    /// file, or deletes a recording; `n` or Esc cancels. Returns a command for the scanner (a
+    /// file, or deletes a recording or all of them; `n` or Esc cancels. Returns a command for the scanner (a
     /// deleted recording is logged), if any.
     fn confirm_key(&mut self, code: KeyCode) -> Option<Command> {
         let (action, _) = self.confirm.clone()?;
@@ -989,7 +1038,17 @@ impl App {
                             cmd = Some(Command::RecordingDeleted(path));
                         })
                     }
+                    ConfirmAction::DeleteAllRecordings(ch) => {
+                        self.ctx.delete_all_recordings(ch).and_then(|(log, error)| {
+                            cmd = Some(log);
+                            error.map_or(Ok(()), Err)
+                        })
+                    }
                 };
+                // Some files may be gone also after an error.
+                if action == ConfirmAction::DeleteAllRecordings(None) {
+                    self.rec_sel = 0;
+                }
                 match result {
                     Ok(()) => {
                         self.confirm = None;
@@ -997,8 +1056,11 @@ impl App {
                             self.activity_sel = 0;
                         }
                         // Back to the channels when the last file of the channel went.
-                        if let (ConfirmAction::DeleteRecording(_), Some(ch)) =
-                            (action, self.rec_channel)
+                        if let (
+                            ConfirmAction::DeleteRecording(_)
+                            | ConfirmAction::DeleteAllRecordings(Some(_)),
+                            Some(ch),
+                        ) = (action, self.rec_channel)
                         {
                             let n = self.ctx.rec_files(ch).len();
                             if n == 0 {

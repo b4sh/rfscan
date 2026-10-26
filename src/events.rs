@@ -145,6 +145,13 @@ pub enum Command {
     },
     /// A recording was deleted (from the TUI or the web GUI): the scanner logs it.
     RecordingDeleted(std::path::PathBuf),
+    /// All the recordings (`dir` = `--record-dir`) or those of one channel (its subdirectory)
+    /// were deleted, except `skipped` (the file being recorded): the scanner logs it.
+    RecordingsDeleted {
+        dir: std::path::PathBuf,
+        files: usize,
+        skipped: usize,
+    },
     /// Change the entry threshold by this many dB.
     Squelch(f32),
 }
