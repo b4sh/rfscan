@@ -79,6 +79,8 @@ pub struct ScanConfig {
     pub squelch_abs: Option<f32>,
     pub hysteresis: f32,
     pub pause: Duration,
+    /// Locked -> Hang hold time on digi channels (`--digi-hold`), longer than a TDMA gap.
+    pub digi_hold: Duration,
     pub duration: Option<Duration>,
     /// Hit confirmation by a measurement at a different LO (`--confirm`).
     pub confirm: bool,
@@ -1006,8 +1008,15 @@ pub fn run(
                     lock.peak_rssi = lock.peak_rssi.max(power_db);
                     lock.peak_snr = lock.peak_snr.max(snr);
                 }
+                // Digi: the gaps between TDMA bursts must not end the lock. Its tail is not
+                // cut from the audio, so the longer hold does not delay the stream.
+                let hold = if lock.mode == Modulation::Digi {
+                    cfg.digi_hold
+                } else {
+                    EXIT_HOLD
+                };
                 match lock.below {
-                    Some((since, tail_from)) if now - since >= EXIT_HOLD => {
+                    Some((since, tail_from)) if now - since >= hold => {
                         logev!(
                             log,
                             Level::Info,

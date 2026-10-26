@@ -128,7 +128,7 @@ Without a scan mode rfscan scans 144-146 MHz, NFM, 12.5 kHz.
 - **Threshold.** A channel stops the scanner when its SNR (power above the noise floor of its window) reaches `--squelch-snr` dB (default 10). `--squelch-abs dBFS` adds an absolute power threshold. The levels are in dBFS, relative to the full scale of the receiver's converter (not dBm).
 - **Strongest channel.** Of several channels above the threshold in one window, the strongest one wins. A channel weaker than its direct neighbor (also an excluded one) is leakage of the neighbor's signal and does not stop the scanner.
 - **Confirmation** (`--confirm on|off`, default on). Before stopping, rfscan measures the channel again with the tuner set elsewhere (for about 60 ms). A real signal stays on its frequency; images and spurs of the receiver move with the tuner and are rejected (`rejected` in the console). Cost: about one settle plus 60 ms per hit.
-- **States.** LOCKED: the channel is demodulated and played. When the SNR falls below the threshold minus `--hysteresis` (default 3 dB) for 30 ms, the scanner waits (HANG) for `--pause` seconds (default 2); if the signal returns, it goes back to the channel, otherwise it goes on scanning from the next window.
+- **States.** LOCKED: the channel is demodulated and played. When the SNR falls below the threshold minus `--hysteresis` (default 3 dB) for 30 ms (on `digi` channels for `--digi-hold` ms, default 120, longer than the gaps between the TDMA bursts of a DMR radio in direct mode), the scanner waits (HANG) for `--pause` seconds (default 2); if the signal returns, it goes back to the channel, otherwise it goes on scanning from the next window.
 
 ## Channel file: names and modes
 

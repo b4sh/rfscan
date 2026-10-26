@@ -801,10 +801,11 @@ fn run_scan(cli: &Cli, src: &mut SoapySource, rate: f64, log: &mut Log) -> anyho
     logln!(
         log,
         Level::Debug,
-        "hysteresis {} dB (leaving Locked at SNR < {} dB), pause {} s",
+        "hysteresis {} dB (leaving Locked at SNR < {} dB), pause {} s, digi hold {} ms",
         cli.hysteresis,
         cli.squelch_snr - cli.hysteresis,
-        cli.pause
+        cli.pause,
+        cli.digi_hold
     );
 
     let cfg = scanner::ScanConfig {
@@ -813,6 +814,7 @@ fn run_scan(cli: &Cli, src: &mut SoapySource, rate: f64, log: &mut Log) -> anyho
         squelch_abs: cli.squelch_abs,
         hysteresis: cli.hysteresis,
         pause: Duration::from_secs_f64(cli.pause),
+        digi_hold: Duration::from_millis(cli.digi_hold),
         duration: cli.duration.map(Duration::from_secs_f64),
         confirm: cli.confirm,
         confirm_blocks: ((CONFIRM_S * rate) / det.samples_needed() as f64)

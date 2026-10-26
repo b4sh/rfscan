@@ -255,6 +255,16 @@ pub struct Cli {
     #[arg(long, value_name = "DB", hide_short_help = true, default_value_t = 0.0, allow_negative_numbers = true, help_heading = H_AUDIO)]
     pub digi_gain: f32,
 
+    /// How long a digi channel stays locked after its signal drops, in ms
+    ///
+    /// How long a digi channel stays locked after its signal drops below the threshold, in ms.
+    /// It must be longer than the gap between TDMA bursts: a DMR radio in direct mode (simplex)
+    /// or a simplex hotspot transmits a 30 ms burst every 60 ms, and a shorter time cuts the
+    /// frames DSD-FME needs. The stream to DSD-FME is not delayed by it, and analog channels
+    /// keep their own 30 ms
+    #[arg(long, value_name = "MS", hide_short_help = true, default_value_t = 120, help_heading = H_AUDIO)]
+    pub digi_hold: u64,
+
     /// Digital voice through DSD-FME started by rfscan
     ///
     /// Digital mode with DSD-FME started by rfscan in the background: rfscan sends it the
