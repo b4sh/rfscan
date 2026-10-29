@@ -101,6 +101,16 @@ body:not([data-tab="main"]) #main { display: none; }
 .big { font-size: clamp(42px, 13vw, 72px); font-weight: 800; letter-spacing: -.5px; line-height: 1; }
 .big.word { font-size: clamp(30px, 9vw, 52px); letter-spacing: 2px; color: var(--scan); }
 .big.word.paused { color: var(--pause); }
+/* SCANNING: bold italic, a soft wave of transparency moving from left to right, 150 ms per
+   letter, 1.5 letters wide, then a pause of 2 letters (8 + 2 * 1.5 + 2 = 13 slots, 1950 ms). */
+.big.word.scan { font-style: italic; }
+.big.word.scan span { animation: scanwave 1950ms linear infinite; animation-delay: calc(150ms * var(--i)); }
+@keyframes scanwave {
+  0% { opacity: 1; animation-timing-function: ease-in-out; }
+  11.538% { opacity: .3; animation-timing-function: ease-in-out; }
+  23.077% { opacity: 1; }
+  100% { opacity: 1; }
+}
 .unit { color: var(--dim); font-size: 15px; height: 20px; line-height: 20px; }
 .name { font-size: clamp(17px, 5vw, 22px); font-weight: 700; color: var(--name); height: 30px; line-height: 30px; margin-top: 2px; }
 .meta { color: var(--dim); font-size: 14px; height: 20px; line-height: 20px; }
@@ -652,12 +662,12 @@ function renderDisplay() {
     setText("dBig", L.label);
     big.className = "big";
   } else {
-    // The dots appear one after another; the hidden ones keep the word in place.
-    const n = 1 + Math.floor(Date.now() / 400) % 3;
+    // SCANNING: one span per letter for the wave (replaced only on a change, so it keeps running).
+    const scan = !!st && !paused;
     const html = !st ? "OFFLINE" : paused ? "PAUSED"
-      : `SCANNING${".".repeat(n)}<span style="visibility:hidden">${".".repeat(3 - n)}</span>`;
+      : [..."SCANNING"].map((c, i) => `<span style="--i:${i}">${c}</span>`).join("");
     if (big.innerHTML !== html) big.innerHTML = html;
-    big.className = "big word" + (paused ? " paused" : "") + (!st ? " off" : "");
+    big.className = "big word" + (scan ? " scan" : "") + (paused ? " paused" : "") + (!st ? " off" : "");
   }
   $("dUnit").classList.toggle("off", !L);
   setText("dName", L && L.name ? L.name : " ");
@@ -1102,9 +1112,6 @@ $("bTheme").onclick = () => {
   applyTheme(t);
   try { localStorage.setItem("rfscan-theme", t); } catch (e) {}
 };
-
-// The dots after SCANNING move even when no message comes.
-setInterval(() => { if (S.status && !S.lock && S.status.state === "scanning") renderDisplay(); }, 400);
 
 setTab("main");
 render(); renderHistory(); renderActivity(); renderExcl();

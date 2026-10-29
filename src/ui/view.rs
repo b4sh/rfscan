@@ -993,7 +993,7 @@ fn lock_lines(app: &App, lock: &LockView, width: usize, big: bool) -> Vec<Line<'
 }
 
 /// The fixed slots of the central part, the same in the scanning and the lock view (user
-/// decision): an empty line, the headline (large `SCANNING...` or frequency, or one line in the
+/// decision): an empty line, the headline (large `SCANNING` or frequency, or one line in the
 /// compact layout), an empty line, the info line (channel name or pause message, otherwise
 /// empty), the extra line (digi state, otherwise empty) and the details. Every element keeps
 /// its row whether or not the optional lines have content.
@@ -1108,32 +1108,63 @@ fn digi_line(app: &App) -> Line<'static> {
     Line::from(l)
 }
 
-/// The scanning view: a large (or, in a small window, normal) `SCANNING` with dots appearing
-/// one after another, and the mini-spectrum of the last window. The progress is in the top line.
+/// The scanning view: a large (or, in a small window, normal) `SCANNING` with a wave of one
+/// dimmed letter moving from left to right, and the mini-spectrum of the last window. The
+/// progress is in the top line.
 fn scan_lines(app: &App, width: usize, big: bool) -> Vec<Line<'static>> {
+    const WORD: &str = "SCANNING";
+    // The wave moves by one letter every 150 ms, then a pause of 2 letters.
+    const STEP_MS: u128 = 150;
+    const SLOTS: u128 = WORD.len() as u128 + 2;
     let paused = app.status.is_some_and(|s| s.state == ScanState::Paused);
     let style = if paused {
         Style::new().fg(DIM).add_modifier(Modifier::BOLD)
     } else {
-        Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        Style::new()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD | Modifier::ITALIC)
     };
-    // 0..3 dots, a new one every 400 ms; paused: no dots.
-    let dots = if paused {
-        0
+    // The dimmed letter; paused: none.
+    let wave = if paused {
+        None
     } else {
         let ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_millis());
-        (ms / 400 % 4) as usize
+        Some((ms / STEP_MS % SLOTS) as usize)
     };
-    let word = format!("SCANNING{}{}", ".".repeat(dots), " ".repeat(3 - dots));
+    let letter_style = |i: usize| {
+        if wave == Some(i) {
+            style.add_modifier(Modifier::DIM)
+        } else {
+            style
+        }
+    };
     let headline = if big {
-        bigtext::render(&word)
-            .into_iter()
-            .map(|row| Line::from(Span::styled(row, style)).centered())
+        // Each letter rendered on its own, joined by the same gap as in a whole word.
+        let glyphs: Vec<_> = WORD
+            .chars()
+            .map(|c| bigtext::render(c.encode_utf8(&mut [0; 4])))
+            .collect();
+        (0..bigtext::HEIGHT)
+            .map(|row| {
+                let mut spans = Vec::with_capacity(2 * glyphs.len());
+                for (i, g) in glyphs.iter().enumerate() {
+                    if i > 0 {
+                        spans.push(Span::styled(" ", style));
+                    }
+                    spans.push(Span::styled(g[row].clone(), letter_style(i)));
+                }
+                Line::from(spans).centered()
+            })
             .collect()
     } else {
-        vec![Line::from(vec![text("  "), Span::styled(word, style)])]
+        let mut spans = vec![text("  ")];
+        spans.extend(
+            WORD.char_indices()
+                .map(|(i, c)| Span::styled(c.to_string(), letter_style(i))),
+        );
+        vec![Line::from(spans)]
     };
     // Info line: the pause message (or a note before the first measurement), otherwise empty.
     let info = if paused {
