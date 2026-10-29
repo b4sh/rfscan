@@ -480,6 +480,7 @@ const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 const recTag = r => `<span class="rec">${r ? "✓" : ""}</span>`;
 
 // State from rfscan: the last message of each kind.
+let autoAudio = false;  // audio started on its own with --local-audio off (once per page load)
 const S = { hello: null, status: null, lock: null, spectrum: null, history: [], activity: [], excl: [], exclAt: 0, recs: [], recFiles: null };
 let ws = null;
 
@@ -563,9 +564,12 @@ const Audio_ = {
     this.node = ctx.createScriptProcessor(ctx.sampleRate <= 16000 ? 512 : 2048, 0, 1);
     this.node.onaudioprocess = e => this.pull(e.outputBuffer.getChannelData(0));
     this.node.connect(ctx.destination);
+    ctx.onstatechange = () => renderControls();
     ctx.resume();
     send({ c: "audio", on: true });
   },
+  // Started without a click the browser may keep the context suspended until the first gesture.
+  get suspended() { return !!this.ctx && this.ctx.state === "suspended"; },
   stop() {
     send({ c: "audio", on: false });
     if (this.node) this.node.disconnect();
@@ -601,6 +605,13 @@ function renderHello() {
   $("device").textContent = `${h.device} · ${h.rate}`;
   document.body.classList.toggle("nolocal", !h.local_audio);
   document.body.classList.toggle("norec", !h.rec);
+  // Without a local output the browser is the only audio: on by default, once per page load
+  // (stopping it later is the user's choice, also after a reconnect).
+  if (!h.local_audio && !autoAudio) {
+    autoAudio = true;
+    if (!Audio_.ctx) Audio_.start();
+    renderControls();
+  }
   $("exWide").textContent = `Exclude ±${h.exclude_wide} channel${h.exclude_wide === 1 ? "" : "s"}`;
   $("exDurs").innerHTML = [null, ...(h.exclude_minutes || [])].map(m =>
     `<button class="smallbtn" data-min="${m ?? ""}">${m ? m + " min" : "Permanent"}</button>`).join("");
@@ -722,8 +733,8 @@ function renderControls() {
   $("nrHint").textContent = L && L.mode === "DIGI" ? "not on digi" : "tap to turn " + (nrOn ? "off" : "on");
   $("bNr").classList.toggle("off", !nrOn);
   $("bNrDown").disabled = $("bNrUp").disabled = !nrOn;
-  const audio = !!Audio_.ctx;
-  $("bAudio").innerHTML = audio ? "■ Audio on" : "▶ Audio";
+  const audio = !!Audio_.ctx && !Audio_.suspended;
+  $("bAudio").innerHTML = audio ? "■ Audio on" : Audio_.suspended ? "▶ Audio (tap)" : "▶ Audio";
   $("bAudio").classList.toggle("on", audio);
   $("bAudio").classList.toggle("primary", !audio);
   const muted = !!(st && st.muted);
@@ -1066,7 +1077,16 @@ $("bNr").onclick = () => send({ c: "nr" });
 $("bNrUp").onclick = () => send({ c: "nr_step", d: 1 });
 $("bNrDown").onclick = () => send({ c: "nr_step", d: -1 });
 $("bMute").onclick = () => send({ c: "mute" });
-$("bAudio").onclick = () => { if (Audio_.ctx) Audio_.stop(); else Audio_.start(); renderControls(); };
+$("bAudio").onclick = () => {
+  if (Audio_.suspended) Audio_.ctx.resume();
+  else if (Audio_.ctx) Audio_.stop();
+  else Audio_.start();
+  renderControls();
+};
+// Audio started automatically and blocked by the autoplay policy: the first gesture anywhere
+// on the page unblocks it.
+for (const ev of ["click", "keydown", "touchend"])
+  document.addEventListener(ev, () => { if (Audio_.suspended) Audio_.ctx.resume(); });
 $("bClear").onclick = () => confirmBox("Clear the activity log?", "All entries are removed and the empty file is saved. This cannot be undone.", () => send({ c: "clear_activity" }));
 
 // Theme: dark by default; the choice is remembered per browser.
