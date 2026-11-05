@@ -518,7 +518,7 @@ function connect() {
     $("conn").classList.add("off");
     S.status = null;
     render();
-    setTimeout(connect, 2000);
+    connect.retry = setTimeout(connect, 2000);
   };
   ws.onmessage = e => {
     if (typeof e.data !== "string") { Audio_.frame(e.data); return; }
@@ -548,6 +548,18 @@ function connect() {
   };
 }
 
+// Back on a page that was hidden: the audio and the connection may have been stopped meanwhile,
+// and timers may have been held back, so neither waits. A stopped audio has no context to resume,
+// and a connection still open or being opened is left alone, so there is never a second one.
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) return;
+  if (Audio_.ctx && Audio_.ctx.state !== "running") Audio_.ctx.resume();
+  if (ws && ws.readyState === WebSocket.CLOSED) {
+    clearTimeout(connect.retry);
+    connect();
+  }
+});
+
 /* ---- audio: 8 kHz μ-law into a ring buffer, played as one continuous stream (works over plain
    HTTP, unlike AudioWorklet). The context runs at 8 kHz when the browser allows it, so the
    browser does the resampling to the sound card; otherwise linear interpolation here. ---- */
@@ -561,6 +573,7 @@ const Audio_ = {
   RATE: 8000,
   TARGET: 1200,  // samples queued before playing starts, and after an underrun (0.15 s)
   MAX: 4000,     // above this the oldest samples are dropped down to TARGET (0.5 s, clock drift)
+  TONE_HZ: 30, TONE_GAIN: 0.001,  // keep-alive tone, see start()
   ctx: null, node: null,
   ring: new Float32Array(8192), w: 0, r: 0, count: 0, frac: 0, step: 1, primed: false,
   start() {
@@ -574,6 +587,15 @@ const Audio_ = {
     this.node = ctx.createScriptProcessor(ctx.sampleRate <= 16000 ? 512 : 2048, 0, 1);
     this.node.onaudioprocess = e => this.pull(e.outputBuffer.getChannelData(0));
     this.node.connect(ctx.destination);
+    // A browser puts a hidden tab to sleep while its output is silent, which is most of the time
+    // on a quiet band. A tone too low and too weak to hear keeps the output from being silent.
+    // It goes only to this output and ends with the context when the audio is stopped.
+    const tone = ctx.createOscillator(), level = ctx.createGain();
+    tone.frequency.value = this.TONE_HZ;
+    level.gain.value = this.TONE_GAIN;
+    tone.connect(level);
+    level.connect(ctx.destination);
+    tone.start();
     ctx.onstatechange = () => renderControls();
     ctx.resume();
     send({ c: "audio", on: true });
