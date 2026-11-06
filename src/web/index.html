@@ -302,7 +302,7 @@ nav.tabs button.active { color: var(--accent); }
 .empty { color: var(--faint); padding: 10px 2px; font-size: 13px; }
 .about a { color: var(--dim); }
 body.nolocal #bMute { display: none; }
-body.nolocal #bAudio { grid-column: 1 / -1; }
+body:not(.nolocal) #bBackground { grid-column: 1 / -1; }
 @media (min-width: 960px) and (orientation: landscape) { .toast { bottom: 20px; } }
 </style>
 </head>
@@ -371,10 +371,12 @@ body.nolocal #bAudio { grid-column: 1 / -1; }
         </div>
         <button class="btn primary" id="bAudio">▶ Audio</button>
         <button class="btn" id="bMute">🔈 Mute PC</button>
+        <button class="btn" id="bBackground" title="Audio as a stream: keeps playing with the screen locked, about 3 s behind">Background</button>
       </div>
     </section>
 
     <section class="card stats" id="stats"></section>
+    <audio id="streamAudio" preload="none" style="display:none"></audio>
     <div class="stats about" id="about"></div>
   </div>
 
@@ -554,6 +556,7 @@ function connect() {
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) return;
   if (Audio_.ctx && Audio_.ctx.state !== "running") Audio_.ctx.resume();
+  Audio_.revive();
   if (ws && ws.readyState === WebSocket.CLOSED) {
     clearTimeout(connect.retry);
     connect();
@@ -574,9 +577,24 @@ const Audio_ = {
   TARGET: 1200,  // samples queued before playing starts, and after an underrun (0.15 s)
   MAX: 4000,     // above this the oldest samples are dropped down to TARGET (0.5 s, clock drift)
   TONE_HZ: 30, TONE_GAIN: 0.001,  // keep-alive tone, see start()
+  START_SILENCE: 15,  // seconds of silence the server sends first, so the stream starts at once
+  SKIP_RATE: 4,  // speed through that silence: faster runs out of data and stalls
+  on: false, background: false,  // background: the stream instead of the fast path
   ctx: null, node: null,
+  el: document.getElementById("streamAudio"), streamAt: 0, streamRetry: null,
+  blocked: false, interrupted: false, unblockedAt: 0,
   ring: new Float32Array(8192), w: 0, r: 0, count: 0, frac: 0, step: 1, primed: false,
   start() {
+    this.on = true;
+    this.interrupted = false;
+    if (this.background) {
+      this.startStream();
+      this.showIcon(true);
+    } else {
+      this.startFast();
+    }
+  },
+  startFast() {
     const AC = window.AudioContext || window.webkitAudioContext;
     let ctx;
     try { ctx = new AC({ sampleRate: this.RATE }); } catch (e) { ctx = new AC(); }
@@ -600,13 +618,67 @@ const Audio_ = {
     ctx.resume();
     send({ c: "audio", on: true });
   },
-  // Started without a click the browser may keep the context suspended until the first gesture.
-  get suspended() { return !!this.ctx && this.ctx.state === "suspended"; },
+  // Started without a click the browser may block the sound until the first gesture.
+  get suspended() { return this.blocked || (!!this.ctx && this.ctx.state === "suspended"); },
+  unblock() {
+    this.unblockedAt = Date.now();
+    if (this.ctx) this.ctx.resume();
+    if (this.blocked) this.startStream();
+  },
   stop() {
-    send({ c: "audio", on: false });
+    if (this.ctx) send({ c: "audio", on: false });
     if (this.node) this.node.disconnect();
     if (this.ctx) this.ctx.close();
     this.node = null; this.ctx = null;
+    this.on = false; this.blocked = false; this.interrupted = false;
+    clearTimeout(this.streamRetry);
+    if (this.el.hasAttribute("src")) {
+      this.el.pause();
+      this.el.removeAttribute("src");
+      this.el.load();
+    }
+    this.showIcon(false);
+  },
+  // The user's choice, for this page only. Switching is a gesture, so the new mode may start at once.
+  setBackground(v) {
+    const on = this.on;
+    if (on) this.stop();
+    this.background = v;
+    if (on) this.start();
+  },
+  // A phone keeps only a playing media element alive while locked.
+  startStream() {
+    clearTimeout(this.streamRetry);
+    this.streamAt = Date.now();
+    this.blocked = false;
+    this.el.src = `/stream.wav${location.search}`;
+    this.el.play().catch(e => {
+      if (e.name !== "NotAllowedError" || !this.on || !this.background) return;
+      this.blocked = true;
+      renderControls();
+    });
+  },
+  // Paused without a tap of the player (Firefox, when the source changes): start again.
+  revive() {
+    if (this.on && this.background && this.el.paused && !this.interrupted) this.startStream();
+  },
+  // After a pause of the player: a fresh start, since the old connection would resume far behind.
+  resume() {
+    this.interrupted = false;
+    this.startStream();
+    renderControls();
+  },
+  skipSilence() {
+    if (!this.on || !this.background) return;
+    const rate = this.el.currentTime < this.START_SILENCE ? this.SKIP_RATE : 1;
+    if (this.el.playbackRate !== rate) this.el.playbackRate = rate;
+  },
+  // The icon of the browser's media controls. Their buttons act on the media element by themselves.
+  showIcon(show) {
+    if (!("mediaSession" in navigator)) return;
+    navigator.mediaSession.metadata = show ? new MediaMetadata({
+      title: "rfscan", artwork: [{ src: "/icons/icon-512.png", sizes: "512x512", type: "image/png" }],
+    }) : null;
   },
   frame(buf) {
     if (!this.ctx) return;
@@ -630,6 +702,21 @@ const Audio_ = {
     }
   },
 };
+for (const ev of ["playing", "timeupdate"]) Audio_.el.addEventListener(ev, () => Audio_.skipSilence());
+// The pause of the browser's media controls silences this browser; the scanner keeps scanning.
+Audio_.el.addEventListener("pause", () => {
+  // Not a tap: the end of a broken stream, and Firefox pausing by itself when the source changes.
+  if (!Audio_.on || Audio_.el.ended || Date.now() - Audio_.streamAt < 2000) return;
+  Audio_.interrupted = true;
+  renderControls();
+});
+Audio_.el.addEventListener("play", () => { if (Audio_.interrupted) Audio_.resume(); });
+for (const ev of ["error", "ended"])
+  Audio_.el.addEventListener(ev, () => {
+    if (!Audio_.on || !Audio_.background || Audio_.interrupted) return;
+    clearTimeout(Audio_.streamRetry);
+    Audio_.streamRetry = setTimeout(() => { if (Audio_.on && Audio_.background) Audio_.startStream(); }, 2000);
+  });
 
 /* ---- rendering ---- */
 function renderHello() {
@@ -641,7 +728,7 @@ function renderHello() {
   // (stopping it later is the user's choice, also after a reconnect).
   if (!h.local_audio && !autoAudio) {
     autoAudio = true;
-    if (!Audio_.ctx) Audio_.start();
+    if (!Audio_.on) Audio_.start();
     renderControls();
   }
   $("exWide").textContent = `Exclude ±${h.exclude_wide} channel${h.exclude_wide === 1 ? "" : "s"}`;
@@ -765,10 +852,11 @@ function renderControls() {
   $("nrHint").textContent = L && L.mode === "DIGI" ? "not on digi" : "tap to turn " + (nrOn ? "off" : "on");
   $("bNr").classList.toggle("off", !nrOn);
   $("bNrDown").disabled = $("bNrUp").disabled = !nrOn;
-  const audio = !!Audio_.ctx && !Audio_.suspended;
-  $("bAudio").innerHTML = audio ? "■ Audio on" : Audio_.suspended ? "▶ Audio (tap)" : "▶ Audio";
-  $("bAudio").classList.toggle("on", audio);
-  $("bAudio").classList.toggle("primary", !audio);
+  const audio = Audio_.on && !Audio_.suspended, paused = audio && Audio_.interrupted;
+  $("bAudio").innerHTML = paused ? "▶ Audio paused" : audio ? "■ Audio on" : Audio_.suspended ? "▶ Tap to start audio" : "▶ Audio";
+  $("bAudio").classList.toggle("on", audio && !paused);
+  $("bAudio").classList.toggle("primary", !audio || paused);
+  $("bBackground").classList.toggle("on", Audio_.background);
   const muted = !!(st && st.muted);
   $("bMute").innerHTML = muted ? "🔇 PC muted" : "🔈 Mute PC";
   $("bMute").classList.toggle("danger", muted);
@@ -1110,15 +1198,25 @@ $("bNrUp").onclick = () => send({ c: "nr_step", d: 1 });
 $("bNrDown").onclick = () => send({ c: "nr_step", d: -1 });
 $("bMute").onclick = () => send({ c: "mute" });
 $("bAudio").onclick = () => {
-  if (Audio_.suspended) Audio_.ctx.resume();
-  else if (Audio_.ctx) Audio_.stop();
+  // The touch before this click has just unblocked the audio: not a second tap.
+  if (Date.now() - Audio_.unblockedAt < 600) return;
+  if (Audio_.suspended) Audio_.unblock();
+  else if (Audio_.interrupted) Audio_.resume();
+  else if (Audio_.on) Audio_.stop();
   else Audio_.start();
+  renderControls();
+};
+$("bBackground").onclick = () => {
+  Audio_.setBackground(!Audio_.background);
   renderControls();
 };
 // Audio started automatically and blocked by the autoplay policy: the first gesture anywhere
 // on the page unblocks it.
 for (const ev of ["click", "keydown", "touchend"])
-  document.addEventListener(ev, () => { if (Audio_.suspended) Audio_.ctx.resume(); });
+  document.addEventListener(ev, () => {
+    if (Audio_.suspended) Audio_.unblock();
+    Audio_.revive();
+  });
 $("bClear").onclick = () => confirmBox("Clear the activity log?", "All entries are removed and the empty file is saved. This cannot be undone.", () => send({ c: "clear_activity" }));
 
 // Theme: dark by default; the choice is remembered per browser.

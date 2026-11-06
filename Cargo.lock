@@ -2034,6 +2034,7 @@ dependencies = [
  "deunicode",
  "directories",
  "fs4",
+ "futures-util",
  "memory-stats",
  "nnnoiseless",
  "num-complex",

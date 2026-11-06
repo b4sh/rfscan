@@ -18,6 +18,7 @@ ctrlc = "3.5.2"
 deunicode = "1.6.2"
 directories = "6.0.0"
 fs4 = "1.1.0"
+futures-util = { version = "0.3.34", default-features = false }
 memory-stats = "1.2.0"
 nnnoiseless = { version = "0.5.2", default-features = false }
 num-complex = "0.4"

@@ -16,7 +16,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use axum::Router;
-use axum::body::Bytes;
+use axum::body::{Body, Bytes};
 use axum::extract::ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, State};
 use axum::http::{StatusCode, header};
@@ -222,6 +222,7 @@ async fn serve(
         .route("/manifest.json", get(manifest))
         .route("/icons/{name}", get(icon))
         .route("/recording/{id}", get(recording))
+        .route("/stream.wav", get(stream))
         .route("/ws", get(ws))
         .with_state((hub, stop_rx.clone()));
     let mut stop = stop_rx;
@@ -356,6 +357,55 @@ async fn recording(
             .into_response(),
         _ => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+/// The scanner audio as one endless WAV file for a media element: a player of the browser keeps
+/// fetching and playing it when the page is hidden or frozen, which Web Audio does not. The audio
+/// frames include the silence between signals, so the player never runs out of data. A browser
+/// puts a locked page to sleep after some seconds of silent output, so the stream carries the tone.
+async fn stream(State((hub, stop)): State<AppState>, Query(q): Query<TokenQuery>) -> Response {
+    if !hub.authorized(&q) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let mut tone = StreamTone::default();
+    let state = (
+        Some(stream_start(&mut tone)),
+        tone,
+        hub.tx.subscribe(),
+        stop,
+    );
+    let frames =
+        futures_util::stream::unfold(state, |(start, mut tone, mut rx, mut stop)| async move {
+            if let Some(chunk) = start {
+                return Some((
+                    Ok::<_, std::convert::Infallible>(chunk),
+                    (None, tone, rx, stop),
+                ));
+            }
+            loop {
+                tokio::select! {
+                    o = rx.recv() => match o {
+                        Ok(Out::Audio(frame)) => {
+                            let chunk = Bytes::from(mulaw_frame_to_pcm(&frame, &mut tone));
+                            return Some((Ok(chunk), (None, tone, rx, stop)));
+                        }
+                        Ok(Out::Text(_)) | Err(broadcast::error::RecvError::Lagged(_)) => {}
+                        Err(broadcast::error::RecvError::Closed) => return None,
+                    },
+                    _ = stop.changed() => return None,
+                }
+            }
+        });
+    (
+        [
+            (header::CONTENT_TYPE, "audio/wav"),
+            (header::CACHE_CONTROL, "no-store"),
+            // A reverse proxy must pass the live audio on at once (nginx reads this header).
+            (header::HeaderName::from_static("x-accel-buffering"), "no"),
+        ],
+        Body::from_stream(frames),
+    )
+        .into_response()
 }
 
 async fn ws(
@@ -1110,6 +1160,87 @@ async fn audio_task(
 /// Sample rate of the μ-law audio (browser audio and recordings).
 pub(crate) const MULAW_RATE: f64 = AUDIO_RATE;
 
+/// WAV header of the audio stream: 16-bit PCM, because browsers do not all play μ-law WAV. The
+/// length is not known, so both sizes have the largest value.
+fn stream_wav_header() -> [u8; 44] {
+    const CHANNELS: u16 = 1;
+    const BITS: u16 = 16;
+    let rate = AUDIO_RATE as u32;
+    let block = CHANNELS * BITS / 8;
+    let mut h = [0u8; 44];
+    h[0..4].copy_from_slice(b"RIFF");
+    h[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
+    h[8..16].copy_from_slice(b"WAVEfmt ");
+    h[16..20].copy_from_slice(&16u32.to_le_bytes());
+    h[20..22].copy_from_slice(&1u16.to_le_bytes());
+    h[22..24].copy_from_slice(&CHANNELS.to_le_bytes());
+    h[24..28].copy_from_slice(&rate.to_le_bytes());
+    h[28..32].copy_from_slice(&(rate * u32::from(block)).to_le_bytes());
+    h[32..34].copy_from_slice(&block.to_le_bytes());
+    h[34..36].copy_from_slice(&BITS.to_le_bytes());
+    h[36..40].copy_from_slice(b"data");
+    h[40..44].copy_from_slice(&u32::MAX.to_le_bytes());
+    h
+}
+
+/// Seconds of silence at the start of the stream (`START_SILENCE` in the page). A browser starts
+/// playing only after about 229 kB, over 14 s of this audio, and the lock screen buttons appear
+/// only then. Sent at once, this silence starts it immediately, and the page skips through it.
+const STREAM_START_SILENCE: usize = 15;
+
+/// The keep-alive tone: too low and too weak to hear, the same as `TONE_HZ` and `TONE_GAIN` in the
+/// page. It runs through the whole stream, so the output of a locked page is never silent.
+const STREAM_TONE_HZ: f64 = 30.0;
+const STREAM_TONE_GAIN: f64 = 0.001;
+
+/// The tone of one stream, sample by sample.
+#[derive(Default)]
+struct StreamTone {
+    /// Position within one second, which holds a whole number of periods.
+    n: u32,
+}
+
+impl StreamTone {
+    fn next_sample(&mut self) -> i16 {
+        let phase = std::f64::consts::TAU * STREAM_TONE_HZ * f64::from(self.n) / AUDIO_RATE;
+        self.n = (self.n + 1) % AUDIO_RATE as u32;
+        (phase.sin() * STREAM_TONE_GAIN * f64::from(i16::MAX)).round() as i16
+    }
+}
+
+/// The first bytes of the stream: the header and the silence with the tone.
+fn stream_start(tone: &mut StreamTone) -> Bytes {
+    let samples = STREAM_START_SILENCE * AUDIO_RATE as usize;
+    let mut start = Vec::with_capacity(44 + samples * 2);
+    start.extend_from_slice(&stream_wav_header());
+    for _ in 0..samples {
+        start.extend_from_slice(&tone.next_sample().to_le_bytes());
+    }
+    Bytes::from(start)
+}
+
+/// One μ-law sample as 16-bit PCM.
+fn mulaw_to_pcm(u: u8) -> i16 {
+    let u = !u;
+    let exponent = i32::from((u >> 4) & 7);
+    let mantissa = i32::from(u & 0x0F);
+    // At most 32124, so it fits.
+    let mag = (((mantissa << 3) + 0x84) << exponent) - 0x84;
+    (if u & 0x80 != 0 { -mag } else { mag }) as i16
+}
+
+/// A μ-law frame with the tone added, as little-endian 16-bit PCM.
+fn mulaw_frame_to_pcm(frame: &[u8], tone: &mut StreamTone) -> Vec<u8> {
+    frame
+        .iter()
+        .flat_map(|&u| {
+            mulaw_to_pcm(u)
+                .saturating_add(tone.next_sample())
+                .to_le_bytes()
+        })
+        .collect()
+}
+
 /// The browser audio chain, also used for recordings: band-pass, anti-alias low-pass,
 /// resampling to 8 kHz, μ-law.
 pub(crate) struct MulawEncoder {
@@ -1199,12 +1330,106 @@ mod tests {
 
     /// Decodes μ-law (the page does the same in JavaScript).
     fn decode(u: u8) -> f32 {
-        let u = !u;
-        let sign = u & 0x80;
-        let exponent = ((u >> 4) & 7) as i32;
-        let mantissa = (u & 0x0F) as i32;
-        let mag = (((mantissa << 3) + 0x84) << exponent) - 0x84;
-        (if sign != 0 { -mag } else { mag }) as f32 / 32768.0
+        f32::from(mulaw_to_pcm(u)) / 32768.0
+    }
+
+    #[test]
+    fn stream_header_describes_8khz_mono_pcm() {
+        let h = stream_wav_header();
+        assert_eq!(&h[0..4], b"RIFF");
+        assert_eq!(&h[8..16], b"WAVEfmt ");
+        assert_eq!(&h[36..40], b"data");
+        let u16_at = |i: usize| u16::from_le_bytes([h[i], h[i + 1]]);
+        let u32_at = |i: usize| u32::from_le_bytes([h[i], h[i + 1], h[i + 2], h[i + 3]]);
+        assert_eq!(u32_at(16), 16);
+        assert_eq!(u16_at(20), 1, "PCM");
+        assert_eq!(u16_at(22), 1, "mono");
+        assert_eq!(u32_at(24), 8000);
+        assert_eq!(u32_at(28), 16000, "bytes per second");
+        assert_eq!(u16_at(32), 2, "block size");
+        assert_eq!(u16_at(34), 16, "bits");
+        assert_eq!(u32_at(40), u32::MAX, "endless data");
+    }
+
+    #[test]
+    fn mulaw_frame_becomes_little_endian_pcm() {
+        assert_eq!(mulaw_to_pcm(0xFF), 0, "silence stays silence");
+        assert_eq!(mulaw_to_pcm(0x7F), 0, "negative zero");
+        assert_eq!(mulaw_to_pcm(0x80), 32124, "largest positive");
+        assert_eq!(mulaw_to_pcm(0x00), -32124, "largest negative");
+        // The tone starts at zero and is small, so the first samples stay close to the signal.
+        let pcm = mulaw_frame_to_pcm(&[0xFF, 0x80, 0x00], &mut StreamTone::default());
+        assert_eq!(pcm.len(), 6);
+        assert_eq!(pcm[..2], 0i16.to_le_bytes());
+        let at = |i: usize| i16::from_le_bytes([pcm[i], pcm[i + 1]]);
+        assert!((at(2) - 32124).abs() <= 33);
+        assert!((at(4) + 32124).abs() <= 33);
+    }
+
+    #[test]
+    fn stream_tone_is_never_silent_and_stays_weak() {
+        let mut tone = StreamTone::default();
+        let one_second: Vec<i16> = (0..8000).map(|_| tone.next_sample()).collect();
+        // 0.001 of full scale.
+        assert_eq!(one_second.iter().copied().max(), Some(33));
+        assert_eq!(one_second.iter().copied().min(), Some(-33));
+        // 30 periods in a second: the rise at the very start has no sample before it.
+        let rising = one_second
+            .windows(2)
+            .filter(|w| w[0] < 0 && w[1] >= 0)
+            .count();
+        assert_eq!(rising, 29);
+        // The next second repeats it without a jump.
+        assert_eq!(tone.next_sample(), one_second[0]);
+    }
+
+    #[test]
+    fn tone_cannot_overflow_a_loud_signal() {
+        let mut tone = StreamTone::default();
+        let frame = [0x80u8; 200];
+        let pcm = mulaw_frame_to_pcm(&frame, &mut tone);
+        for b in pcm.as_chunks::<2>().0 {
+            let x = i16::from_le_bytes([b[0], b[1]]);
+            assert!(x >= 32124 - 33);
+        }
+    }
+
+    #[test]
+    fn quiet_band_carries_the_tone_after_the_start() {
+        let mut tone = StreamTone::default();
+        let start = stream_start(&mut tone);
+        let silent_frame = [0xFFu8; 800];
+        let pcm = mulaw_frame_to_pcm(&silent_frame, &mut tone);
+        assert!(pcm.iter().any(|&b| b != 0), "a quiet band is not silent");
+        // The tone goes on from the start: 15 s are whole periods, so the frame begins at zero.
+        assert_eq!(pcm[..2], 0i16.to_le_bytes());
+        assert!(start.len() > 44);
+    }
+
+    #[test]
+    fn page_has_the_same_tone() {
+        let expected = format!("TONE_HZ: {STREAM_TONE_HZ}, TONE_GAIN: {STREAM_TONE_GAIN},");
+        assert!(include_str!("index.html").contains(&expected));
+    }
+
+    #[test]
+    fn stream_starts_with_the_header_and_enough_silence() {
+        let start = stream_start(&mut StreamTone::default());
+        assert_eq!(start[..44], stream_wav_header());
+        assert_eq!(start.len() - 44, 240_000);
+        // Nothing audible, but not digital silence either.
+        let samples = start[44..]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|b| i16::from_le_bytes([b[0], b[1]]));
+        assert_eq!(samples.map(i16::abs).max(), Some(33));
+    }
+
+    #[test]
+    fn page_knows_the_start_silence() {
+        let expected = format!("START_SILENCE: {STREAM_START_SILENCE},");
+        assert!(include_str!("index.html").contains(&expected));
     }
 
     #[test]
