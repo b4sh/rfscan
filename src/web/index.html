@@ -302,7 +302,10 @@ nav.tabs button.active { color: var(--accent); }
 .empty { color: var(--faint); padding: 10px 2px; font-size: 13px; }
 .about a { color: var(--dim); }
 body.nolocal #bMute { display: none; }
-body:not(.nolocal) #bBackground { grid-column: 1 / -1; }
+#bMute { grid-column: 1 / -1; }
+#bBackground.on { background: var(--hang); border-color: var(--hang); }
+.btn.two { flex-direction: column; gap: 1px; padding: 5px 4px; min-width: 0; text-align: center; }
+.btn.two small { font-size: 11px; font-weight: 400; opacity: .8; }
 @media (min-width: 960px) and (orientation: landscape) { .toast { bottom: 20px; } }
 </style>
 </head>
@@ -369,9 +372,9 @@ body:not(.nolocal) #bBackground { grid-column: 1 / -1; }
           <button class="btn nrval" id="bNr"><b id="nrVal">NR</b><div id="nrHint">noise reduction</div></button>
           <button class="btn" id="bNrUp">+</button>
         </div>
-        <button class="btn primary" id="bAudio">▶ Audio</button>
-        <button class="btn" id="bMute">🔈 Mute PC</button>
-        <button class="btn" id="bBackground" title="Audio as a stream: keeps playing with the screen locked, about 3 s behind">Background</button>
+        <button class="btn two primary" id="bAudio"><span id="audioLabel">▶ Audio</span><small id="audioHint">sound in this browser</small></button>
+        <button class="btn two" id="bBackground" title="Audio as a stream: keeps playing with the screen locked, about 3 s behind"><span>Background</span><small>plays when locked, 3 s late</small></button>
+        <button class="btn two" id="bMute"><span id="muteLabel">🔈 Mute PC</span><small id="muteHint">sound on the rfscan computer</small></button>
       </div>
     </section>
 
@@ -853,12 +856,14 @@ function renderControls() {
   $("bNr").classList.toggle("off", !nrOn);
   $("bNrDown").disabled = $("bNrUp").disabled = !nrOn;
   const audio = Audio_.on && !Audio_.suspended, paused = audio && Audio_.interrupted;
-  $("bAudio").innerHTML = paused ? "▶ Audio paused" : audio ? "■ Audio on" : Audio_.suspended ? "▶ Tap to start audio" : "▶ Audio";
+  $("audioLabel").textContent = paused ? "▶ Audio paused" : audio ? "■ Audio on" : Audio_.suspended ? "▶ Tap to start audio" : "▶ Audio";
+  $("audioHint").textContent = paused ? "tap to restart" : "sound in this browser";
   $("bAudio").classList.toggle("on", audio && !paused);
   $("bAudio").classList.toggle("primary", !audio || paused);
   $("bBackground").classList.toggle("on", Audio_.background);
   const muted = !!(st && st.muted);
-  $("bMute").innerHTML = muted ? "🔇 PC muted" : "🔈 Mute PC";
+  $("muteLabel").textContent = muted ? "🔇 PC muted" : "🔈 Mute PC";
+  $("muteHint").textContent = muted ? "tap to unmute" : "sound on the rfscan computer";
   $("bMute").classList.toggle("danger", muted);
   $("bMute").disabled = !on;
 }
