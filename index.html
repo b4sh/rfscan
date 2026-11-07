@@ -223,6 +223,99 @@ pre .p { color: var(--lime); user-select: none; }
 }
 .fade.more::after { opacity: 1; }
 
+/* Setup tour: tabs with a progress bar, slides that cross-fade */
+.tour { border: 1px solid var(--line); border-radius: 36px; background: var(--card-bg); padding: 12px; }
+.tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.tab {
+  position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; gap: 10px;
+  padding: 12px 8px; border-radius: 999px; border: 1px solid var(--line); background: rgba(255, 255, 255, .025);
+  color: var(--dim); font: 500 16px/1.2 var(--sans); white-space: nowrap; cursor: pointer;
+  transition: color .2s, border-color .2s, background .2s;
+}
+.tab:hover { color: var(--text); }
+.tab .n {
+  flex: none; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center;
+  background: rgba(255, 255, 255, .08); font-size: 13px; transition: background .2s, color .2s;
+}
+.tab.on { color: var(--text); border-color: var(--line2); background: rgba(255, 255, 255, .05); }
+.tab.on .n { background: var(--lime); color: var(--ink); }
+.tab .bar { position: absolute; left: 18px; right: 18px; bottom: 0; height: 2px; background: var(--lime); transform: scaleX(0); transform-origin: left; }
+.tab.on .bar { animation: tour-fill 6s linear forwards; }
+.tour.paused .tab.on .bar { animation-play-state: paused; }
+@keyframes tour-fill { to { transform: scaleX(1); } }
+.slides { display: grid; }
+.slide {
+  grid-area: 1 / 1; display: grid; grid-template-columns: .85fr 1.15fr; gap: 44px; align-items: center; align-content: center;
+  padding: 44px 40px 36px; opacity: 0; visibility: hidden; transition: opacity .3s ease, visibility 0s .3s;
+}
+/* the old slide fades out first, then the new one fades in, so their texts never overlap */
+.slide.on { opacity: 1; visibility: visible; transition: opacity .4s ease .3s, visibility 0s .3s; }
+.slide .k { font: 400 64px/1 var(--sans); letter-spacing: -.04em; color: var(--lime); }
+.slide h3 { font-size: 34px; line-height: 1.1; font-weight: 400; letter-spacing: -.02em; margin: 14px 0 14px; }
+.slide p { color: var(--dim); font-size: 17px; margin: 0 0 12px; }
+.slide p.warn { color: var(--faint); font-size: 14px; }
+.slide code { font-size: 14px; color: var(--text); }
+.art svg { display: block; width: 100%; height: auto; overflow: visible; }
+@media (max-width: 860px) {
+  .slide { grid-template-columns: 1fr; gap: 26px; padding: 32px 18px 22px; }
+  .slide h3 { font-size: 28px; }
+}
+@media (max-width: 700px) {
+  .tour { padding: 8px; border-radius: 28px; }
+  .tabs { gap: 5px; }
+  .tab { padding: 8px 0; }
+  .tab .lbl { display: none; }
+  .tab .bar { left: 12px; right: 12px; }
+  .slide { padding: 26px 8px 14px; }
+  .slide .k { font-size: 48px; }
+  .slide p { font-size: 16px; }
+}
+@media (prefers-reduced-motion: reduce) { .tab.on .bar { animation: none; transform: scaleX(1); } .slide { transition: none; } }
+
+/* Drawings in the tour */
+.g-line { fill: none; stroke: rgba(255, 255, 255, .5); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.g-box { fill: #121418; stroke: rgba(255, 255, 255, .24); stroke-width: 1.5; }
+.g-dot { fill: rgba(255, 255, 255, .35); }
+.g-chip { fill: rgba(212, 251, 60, .08); stroke: var(--lime); stroke-width: 1.5; }
+.g-lime { fill: var(--lime); }
+.g-t { fill: var(--dim); font: 500 13px var(--sans); }
+.g-t.w { fill: var(--text); font-size: 15px; }
+.g-t.l { fill: var(--lime); }
+.g-t.s { fill: var(--faint); font-size: 12px; }
+.g-t.m { font-family: var(--mono); }
+.g-base { fill: none; stroke: rgba(255, 255, 255, .12); stroke-width: 2; stroke-linecap: round; }
+.g-flow { fill: none; stroke: var(--lime); stroke-width: 2; stroke-linecap: round; stroke-dasharray: 2 10; animation: g-flow .9s linear infinite; }
+@keyframes g-flow { to { stroke-dashoffset: -12; } }
+.g-wave { fill: none; stroke: var(--lime); stroke-width: 2; stroke-linecap: round; opacity: 0; animation: g-wave 2.4s ease-out infinite; }
+.g-wave.d2 { animation-delay: .5s; }
+@keyframes g-wave { 0% { opacity: 0; } 20% { opacity: .9; } 100% { opacity: 0; } }
+/* incoming waves: they run from the outer arc to the dot of the antenna, which then lights up */
+.g-rx { fill: none; stroke: var(--lime); stroke-width: 2; stroke-linecap: round; opacity: 0; animation: g-rx 2.1s linear infinite; }
+.g-rx.r2 { animation-delay: .3s; }
+.g-rx.r1 { animation-delay: .6s; }
+@keyframes g-rx { 0% { opacity: 0; } 12% { opacity: .9; } 35% { opacity: 0; } 100% { opacity: 0; } }
+.g-halo { fill: none; stroke: var(--lime); stroke-width: 1.5; opacity: 0; transform-box: fill-box; transform-origin: center; animation: g-halo 2.1s ease-out .85s infinite; }
+@keyframes g-halo { 0% { opacity: .9; transform: scale(1); } 40% { opacity: 0; transform: scale(2.6); } 100% { opacity: 0; transform: scale(2.6); } }
+@media (prefers-reduced-motion: reduce) { .g-flow, .g-wave, .g-rx { animation: none; opacity: .8; } .g-halo { animation: none; } }
+
+/* Terminal on the second slide */
+.term { border: 1px solid var(--line2); border-radius: 18px; background: #050506; overflow: hidden; box-shadow: 0 30px 80px rgba(0, 0, 0, .5); }
+.term .tb { display: flex; align-items: center; gap: 7px; padding: 11px 14px; border-bottom: 1px solid var(--line); font: 12px var(--mono); color: var(--faint); white-space: nowrap; }
+.term .tb i { width: 10px; height: 10px; border-radius: 50%; background: rgba(255, 255, 255, .14); }
+.term .tb span { margin-left: 8px; }
+.term .tl { padding: 16px 18px 18px; font: 14px/1.7 var(--mono); white-space: pre; overflow: hidden; color: var(--text); }
+.term .ln { display: block; }
+.term .p { color: var(--lime); }
+.term .c { color: var(--faint); }
+.term .o { color: var(--dim); }
+.term .cur { display: inline-block; width: .6em; height: 1.1em; vertical-align: -.2em; background: var(--lime); animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.js .slide .term .ln { opacity: 0; }
+.js .slide.on .term .ln { animation: line-in .3s ease forwards; animation-delay: calc(var(--i) * .55s + .3s); }
+@keyframes line-in { from { opacity: 0; transform: translateX(-6px); } to { opacity: 1; transform: none; } }
+@media (max-width: 700px) { .term .tl { font-size: 11px; padding: 12px 12px 14px; } }
+@media (prefers-reduced-motion: reduce) { .js .slide .term .ln { opacity: 1; animation: none; } }
+
 /* Closing call to action */
 .final {
   text-align: center; border: 1px solid var(--line); border-radius: 36px; padding: 84px 28px;
@@ -257,6 +350,7 @@ footer a:hover { color: var(--text); }
     <a class="brand" href="#"><img src="img/logo-180.png" alt="">rfscan</a>
     <div class="links">
       <a class="opt" href="#features">Features</a>
+      <a class="opt" href="#setup">Setup</a>
       <a class="opt" href="#receivers">Receivers</a>
       <a class="opt" href="#start">Get started</a>
       <a href="https://github.com/b4sh/rfscan">GitHub</a>
@@ -351,6 +445,117 @@ footer a:hover { color: var(--text); }
         <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 1v4M15 1v4M9 19v4M15 19v4M1 9h4M1 15h4M19 9h4M19 15h4"/></svg></div>
         <h3>Runs on a Raspberry Pi</h3>
         <p>On a Raspberry Pi 4 the scan is as fast as on a PC: the speed is set by the receiver, not the computer. A small always-on scanner with a phone as its screen.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="alt" id="setup">
+  <div class="wrap">
+    <div class="head-c reveal">
+      <span class="eyebrow">Server and client</span>
+      <h2>Scan on the Pi, listen on any screen</h2>
+      <p class="sub"><strong>rfscan</strong> runs as a server on a Raspberry Pi with the receiver. The web GUI is its client: a browser on a PC or a phone shows the scanner, plays its audio and controls it.</p>
+    </div>
+    <div class="tour reveal">
+      <div class="tabs" role="tablist" aria-label="Setup steps">
+        <button class="tab on" role="tab" aria-selected="true"><span class="n">1</span><span class="lbl">Connect</span><span class="bar"></span></button>
+        <button class="tab" role="tab" aria-selected="false"><span class="n">2</span><span class="lbl">Install</span><span class="bar"></span></button>
+        <button class="tab" role="tab" aria-selected="false"><span class="n">3</span><span class="lbl">Listen</span><span class="bar"></span></button>
+      </div>
+      <div class="slides">
+
+        <div class="slide on" role="tabpanel" data-dur="6500">
+          <div>
+            <div class="k">01</div>
+            <h3>Connect the receiver to a Raspberry Pi</h3>
+            <p>Plug an Airspy, RTL-SDR or SDRplay into a USB port of the Pi and put the antenna on the receiver. Place the Pi where the antenna is: no screen, keyboard or speakers needed.</p>
+          </div>
+          <div class="art" aria-hidden="true">
+            <svg viewBox="0 0 450 240">
+              <path class="g-rx r3" d="M37.4 15.4A32 32 0 0 0 37.4 60.6M82.6 15.4A32 32 0 0 1 82.6 60.6"/>
+              <path class="g-rx r2" d="M44.4 22.4A22 22 0 0 0 44.4 53.6M75.6 22.4A22 22 0 0 1 75.6 53.6"/>
+              <path class="g-rx r1" d="M51.5 29.5A12 12 0 0 0 51.5 46.5M68.5 29.5A12 12 0 0 1 68.5 46.5"/>
+              <circle class="g-halo" cx="60" cy="38" r="4"/>
+              <circle class="g-lime" cx="60" cy="38" r="4"/>
+              <path class="g-line" d="M60 42V186"/>
+              <rect class="g-box" x="44" y="186" width="32" height="14" rx="3"/>
+              <path class="g-base" d="M76 193H108Q116 193 116 185V181Q116 177 120 177H128"/>
+              <path class="g-flow" d="M76 193H108Q116 193 116 185V181Q116 177 120 177H128"/>
+              <rect class="g-box" x="128" y="170" width="12" height="14" rx="2"/>
+              <rect class="g-box" x="140" y="154" width="96" height="46" rx="9"/>
+              <text class="g-t w" x="188" y="182" text-anchor="middle">SDR</text>
+              <circle class="g-lime" cx="224" cy="165" r="3"/>
+              <rect class="g-box" x="236" y="169" width="12" height="16" rx="2"/>
+              <path class="g-base" d="M248 177H296"/>
+              <path class="g-flow" d="M248 177H296"/>
+              <text class="g-t s" x="272" y="166" text-anchor="middle">USB</text>
+              <rect class="g-box" x="296" y="167" width="10" height="20" rx="2"/>
+              <rect class="g-box" x="306" y="90" width="130" height="110" rx="12"/>
+              <g class="g-dot">
+                <circle cx="322" cy="102" r="2"/><circle cx="332" cy="102" r="2"/><circle cx="342" cy="102" r="2"/><circle cx="352" cy="102" r="2"/><circle cx="362" cy="102" r="2"/><circle cx="372" cy="102" r="2"/><circle cx="382" cy="102" r="2"/><circle cx="392" cy="102" r="2"/><circle cx="402" cy="102" r="2"/><circle cx="412" cy="102" r="2"/><circle cx="422" cy="102" r="2"/>
+                <circle cx="322" cy="110" r="2"/><circle cx="332" cy="110" r="2"/><circle cx="342" cy="110" r="2"/><circle cx="352" cy="110" r="2"/><circle cx="362" cy="110" r="2"/><circle cx="372" cy="110" r="2"/><circle cx="382" cy="110" r="2"/><circle cx="392" cy="110" r="2"/><circle cx="402" cy="110" r="2"/><circle cx="412" cy="110" r="2"/><circle cx="422" cy="110" r="2"/>
+              </g>
+              <rect class="g-chip" x="341" y="130" width="60" height="48" rx="5"/>
+              <text class="g-t l" x="371" y="159" text-anchor="middle">rfscan</text>
+              <rect class="g-box" x="430" y="158" width="12" height="26" rx="2"/>
+              <text class="g-t" x="60" y="226" text-anchor="middle">Antenna</text>
+              <text class="g-t" x="188" y="226" text-anchor="middle">SDR receiver</text>
+              <text class="g-t" x="371" y="226" text-anchor="middle">Raspberry Pi</text>
+            </svg>
+          </div>
+        </div>
+
+        <div class="slide" role="tabpanel" data-dur="7500" aria-hidden="true">
+          <div>
+            <div class="k">02</div>
+            <h3>Install <strong>rfscan</strong> and start it</h3>
+            <p>Build it on the Pi with the install script, then run it in console mode, with no local audio and with the web GUI on the home network.</p>
+            <p>A fixed <code>--web-token</code> keeps the link the same, so a bookmark keeps working.</p>
+          </div>
+          <div class="art" aria-hidden="true">
+            <div class="term">
+              <div class="tb"><i></i><i></i><i></i><span>pi@raspberrypi: ~</span></div>
+              <div class="tl"><span class="ln" style="--i:0"><span class="p">$ </span>packaging/linux/install.sh</span><span class="ln" style="--i:1"><span class="c"># builds and installs rfscan</span></span><span class="ln" style="--i:2"><span class="p">$ </span>rfscan --scan-range 144M-146M \</span><span class="ln" style="--i:3">    --headless --local-audio off \</span><span class="ln" style="--i:4">    --web-gui 0.0.0.0:8080 \</span><span class="ln" style="--i:5">    --web-token s3cret</span><span class="ln" style="--i:6"><span class="o">web GUI: http://10.0.0.5:8080/?t=s3cret</span></span><span class="ln" style="--i:7"><span class="cur"></span></span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="slide" role="tabpanel" data-dur="8000" aria-hidden="true">
+          <div>
+            <div class="k">03</div>
+            <h3>Listen on a PC or a phone</h3>
+            <p>Open the link in a browser at home. Away from home, connect through a VPN, or put <strong>rfscan</strong> behind a reverse proxy with HTTPS and a login on your own domain: a phone then installs it as an app (PWA).</p>
+            <p class="warn">The web GUI has no encryption of its own: never forward its port to the internet.</p>
+          </div>
+          <div class="art" aria-hidden="true">
+            <svg viewBox="0 0 450 256">
+              <g transform="translate(0 23)">
+              <rect class="g-box" x="20" y="40" width="230" height="145" rx="10"/>
+              <path class="g-box" d="M4 185H266L254 199H16Z"/>
+              <rect class="g-lime" x="38" y="58" width="64" height="20" rx="10"/>
+              <text class="g-t m" x="70" y="72" text-anchor="middle" style="fill:#0a0b0d;font-size:10px;font-weight:700">LOCKED</text>
+              <text class="g-t w" x="38" y="125" style="font-size:40px;fill:#d4fb3c;letter-spacing:-1px">145.500</text>
+              <g class="g-dot">
+                <rect x="38" y="160" width="4" height="10"/><rect x="46" y="157" width="4" height="13"/><rect x="54" y="161" width="4" height="9"/><rect x="62" y="158" width="4" height="12"/><rect x="70" y="160" width="4" height="10"/><rect x="78" y="156" width="4" height="14"/><rect x="86" y="161" width="4" height="9"/><rect x="94" y="159" width="4" height="11"/><rect x="102" y="140" width="4" height="30" class="g-lime"/><rect x="110" y="150" width="4" height="20"/><rect x="118" y="160" width="4" height="10"/><rect x="126" y="158" width="4" height="12"/><rect x="134" y="161" width="4" height="9"/><rect x="142" y="157" width="4" height="13"/><rect x="150" y="160" width="4" height="10"/><rect x="158" y="159" width="4" height="11"/><rect x="166" y="161" width="4" height="9"/><rect x="174" y="158" width="4" height="12"/><rect x="182" y="160" width="4" height="10"/><rect x="190" y="157" width="4" height="13"/><rect x="198" y="161" width="4" height="9"/><rect x="206" y="159" width="4" height="11"/><rect x="214" y="160" width="4" height="10"/><rect x="222" y="158" width="4" height="12"/>
+              </g>
+              </g>
+              <rect class="g-box" x="300" y="22" width="104" height="200" rx="18"/>
+              <rect class="g-dot" x="336" y="32" width="32" height="5" rx="2.5"/>
+              <rect class="g-lime" x="318" y="56" width="52" height="16" rx="8"/>
+              <text class="g-t m" x="344" y="67" text-anchor="middle" style="fill:#0a0b0d;font-size:8.5px;font-weight:700">LOCKED</text>
+              <text class="g-t" x="352" y="108" text-anchor="middle" style="font-size:19px;fill:#d4fb3c">145.500</text>
+              <path class="g-lime" d="M336 136H342L349 130V150L342 144H336Z"/>
+              <rect x="318" y="190" width="68" height="18" rx="9" fill="none" stroke="rgba(255,255,255,.3)"/>
+              <text class="g-t s" x="352" y="203" text-anchor="middle" style="font-size:10px">Audio</text>
+              <path class="g-wave" d="M355 134A8 8 0 0 1 355 146"/>
+              <path class="g-wave d2" d="M359 129A14 14 0 0 1 359 151"/>
+              <text class="g-t" x="135" y="248" text-anchor="middle">PC · browser</text>
+              <text class="g-t" x="352" y="248" text-anchor="middle">Phone · app</text>
+            </svg>
+          </div>
+        </div>
+
       </div>
     </div>
   </div>
@@ -630,6 +835,34 @@ document.querySelectorAll("pre, .table-wrap").forEach(el => {
   const update = () => nav.classList.toggle("scrolled", scrollY > 8);
   addEventListener("scroll", update, { passive: true });
   update();
+})();
+
+// Setup tour: each tab's progress bar runs for the time of its slide, and when it ends the next
+// slide shows; after the last one it starts over. It waits while the tour is out of view.
+(() => {
+  const tour = document.querySelector(".tour");
+  const tabs = [...tour.querySelectorAll(".tab")];
+  const slides = [...tour.querySelectorAll(".slide")];
+  let cur = 0;
+  function show(i) {
+    cur = i;
+    tabs.forEach((t, k) => { t.classList.toggle("on", k === i); t.setAttribute("aria-selected", k === i); });
+    slides.forEach((s, k) => { s.classList.toggle("on", k === i); s.setAttribute("aria-hidden", k !== i); s.inert = k !== i; });
+    const bar = tabs[i].querySelector(".bar");
+    bar.style.animation = "none";
+    void bar.offsetWidth;
+    bar.style.animation = "";
+    bar.style.animationDuration = slides[i].dataset.dur + "ms";
+  }
+  tabs.forEach((t, k) => {
+    t.addEventListener("click", () => show(k));
+    t.querySelector(".bar").addEventListener("animationend", () => { if (k === cur) show((cur + 1) % tabs.length); });
+  });
+  if ("IntersectionObserver" in window) {
+    tour.classList.add("paused");
+    new IntersectionObserver(([e]) => tour.classList.toggle("paused", !e.isIntersecting), { threshold: .35 }).observe(tour);
+  }
+  show(0);
 })();
 
 // Blocks fade in as they come into view.
