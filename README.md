@@ -1,6 +1,6 @@
 <p align="center"><img src="docs/rfscan-logo.png" alt="rfscan" width="256"></p>
 
-<p align="center"><a href="https://b4sh.github.io/rfscan/">Project page</a> · <a href="../../releases/latest">Download</a> · <a href="DOC.md">Documentation</a></p>
+<p align="center"><a href="https://rfscan.sq1kw.info/">Project page</a> · <a href="../../releases/latest">Download</a> · <a href="DOC.md">Documentation</a></p>
 
 <p align="center">
   <a href="../../releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/b4sh/rfscan?label=release&color=2ea043"></a>
