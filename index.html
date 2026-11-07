@@ -243,7 +243,8 @@ pre .p { color: var(--lime); user-select: none; }
 .tab.on .bar { animation: tour-fill 6s linear forwards; }
 .tour.paused .tab.on .bar { animation-play-state: paused; }
 @keyframes tour-fill { to { transform: scaleX(1); } }
-.slides { display: grid; }
+.slides { display: grid; min-width: 0; }
+.slide, .slide > * { min-width: 0; }
 .slide {
   grid-area: 1 / 1; display: grid; grid-template-columns: .85fr 1.15fr; gap: 44px; align-items: center; align-content: center;
   padding: 44px 40px 36px; opacity: 0; visibility: hidden; transition: opacity .3s ease, visibility 0s .3s;
@@ -313,7 +314,7 @@ pre .p { color: var(--lime); user-select: none; }
 .js .slide .term .ln { opacity: 0; }
 .js .slide.on .term .ln { animation: line-in .3s ease forwards; animation-delay: calc(var(--i) * .55s + .3s); }
 @keyframes line-in { from { opacity: 0; transform: translateX(-6px); } to { opacity: 1; transform: none; } }
-@media (max-width: 700px) { .term .tl { font-size: 12px; padding: 12px 12px 14px; } }
+@media (max-width: 700px) { .term .tl { font-size: 11px; padding: 12px 12px 14px; } }
 @media (prefers-reduced-motion: reduce) { .js .slide .term .ln { opacity: 1; animation: none; } }
 
 /* Closing call to action */
@@ -472,7 +473,7 @@ footer a:hover { color: var(--text); }
             <p>Plug an Airspy, RTL-SDR or SDRplay into a USB port of the Pi and put the antenna on the receiver. Place the Pi where the antenna is: no screen, keyboard or speakers needed.</p>
           </div>
           <div class="art" aria-hidden="true">
-            <svg viewBox="0 0 450 240">
+            <svg viewBox="24 11 422 222">
               <path class="g-rx r3" d="M37.4 15.4A32 32 0 0 0 37.4 60.6M82.6 15.4A32 32 0 0 1 82.6 60.6"/>
               <path class="g-rx r2" d="M44.4 22.4A22 22 0 0 0 44.4 53.6M75.6 22.4A22 22 0 0 1 75.6 53.6"/>
               <path class="g-rx r1" d="M51.5 29.5A12 12 0 0 0 51.5 46.5M68.5 29.5A12 12 0 0 1 68.5 46.5"/>
@@ -529,7 +530,7 @@ footer a:hover { color: var(--text); }
             <p class="warn">The web GUI has no encryption of its own: never forward its port to the internet.</p>
           </div>
           <div class="art" aria-hidden="true">
-            <svg viewBox="0 0 450 256">
+            <svg viewBox="0 18 408 237">
               <g transform="translate(0 23)">
               <rect class="g-box" x="20" y="40" width="230" height="145" rx="10"/>
               <path class="g-box" d="M4 185H266L254 199H16Z"/>
