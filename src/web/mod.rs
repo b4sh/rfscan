@@ -53,7 +53,7 @@ const ICONS: &[(&str, &[u8])] = &[
     ),
 ];
 /// Background of the dark theme: the browser and system bars of the web app.
-const THEME_COLOR: &str = "#1a1a1a";
+const THEME_COLOR: &str = "#16181c";
 /// How often the pump drains the scanner events.
 const PUMP_PERIOD: Duration = Duration::from_millis(50);
 /// How often the audio tap is drained and encoded.

@@ -11,51 +11,54 @@
 <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
 <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
-<meta name="theme-color" content="#1a1a1a">
+<meta name="theme-color" content="#16181c">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <meta name="apple-mobile-web-app-title" content="rfscan">
 <style>
-/* palette: #1a1a1a, #1f5230, #55a845, #d8eaa8 */
+/* palette of the project page: graphite #16181c, lime #d4fb3c, amber #f0c24b */
 /* dark theme (default) */
 :root {
-  --bg: #1a1a1a;
-  --card: #222622;
-  --card2: #1f5230;
-  --line: #2e3a2f;
-  --text: #eef3e2;
-  --dim: #a3b293;
-  --faint: #66705e;
-  --accent: #55a845;
-  --on-accent: #1a1a1a;
-  --name: #d8eaa8;
-  --scan: #d8eaa8;
-  --lock: #55a845;
-  --hang: #e5bf4c;
+  --bg: #16181c;
+  --card: #202227;
+  --card2: #2a2d33;
+  --line: #33363d;
+  --text: #ffffff;
+  --dim: #b4b4b8;
+  --faint: #74767c;
+  --accent: #d4fb3c;
+  --on-accent: #0a0b0d;
+  --name: #d4fb3c;
+  --scan: #e6e7ea;
+  --scanbar: #dcf09a;
+  --lock: #d4fb3c;
+  --hang: #f0c24b;
   --pause: #b3a6e8;
-  --danger: #e5584f;
+  --danger: #ff5f56;
   --digi: #e17bd2;
   --radius: 8px;
   color-scheme: dark;
 }
-/* light theme, chosen with the theme button */
+/* light theme, chosen with the theme button: the same graphite as text, the lime darkened to
+   olive so it stays readable on white */
 :root[data-theme="light"] {
-  --bg: #f1f5e4;
+  --bg: #f3f4f1;
   --card: #ffffff;
-  --card2: #d8eaa8;
-  --line: #c8d5ae;
-  --text: #1a1a1a;
-  --dim: #4b5843;
-  --faint: #98a38a;
-  --accent: #1f5230;
-  --on-accent: #eef5d6;
-  --name: #1f5230;
-  --scan: #1f5230;
-  --lock: #3b8a2d;
-  --hang: #946a00;
+  --card2: #e7e9e3;
+  --line: #d3d6ce;
+  --text: #16181c;
+  --dim: #4a4d55;
+  --faint: #8b8e95;
+  --accent: #4d6a00;
+  --on-accent: #f4ffd6;
+  --name: #4d6a00;
+  --scan: #2a2d33;
+  --scanbar: #7f9c2a;
+  --lock: #5c7f00;
+  --hang: #9a6b00;
   --pause: #65549f;
-  --danger: #b8322a;
+  --danger: #c0352c;
   --digi: #a3338f;
   color-scheme: light;
 }
@@ -98,8 +101,8 @@ body:not([data-tab="main"]) #main { display: none; }
 .display .row { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .off { opacity: .3; }
 .bigrow { height: clamp(46px, 14vw, 78px); display: flex; align-items: center; justify-content: center; }
-.big { font-size: clamp(42px, 13vw, 72px); font-weight: 800; letter-spacing: -.5px; line-height: 1; }
-.big.word { font-size: clamp(30px, 9vw, 52px); letter-spacing: 2px; color: var(--scan); }
+.big { font-size: clamp(42px, 13vw, 72px); font-weight: 800; letter-spacing: -.5px; line-height: 1; color: var(--accent); }
+.big.word { font-size: clamp(30px, 9vw, 52px); letter-spacing: 2px; color: var(--accent); }
 .big.word.paused { color: var(--pause); }
 /* SCANNING: bold italic, a soft wave of transparency moving from left to right, 150 ms per
    letter, 1.5 letters wide, then a pause of 2 letters (8 + 2 * 1.5 + 2 = 13 slots, 1950 ms). */
@@ -149,9 +152,9 @@ body:not([data-tab="main"]) #main { display: none; }
 .rangehead { font-size: 13px; color: var(--dim); text-align: center; height: 18px; line-height: 18px; white-space: nowrap; overflow: hidden; }
 .rangehead b { color: var(--text); }
 .posbar { position: relative; height: 8px; background: var(--card2); border-radius: 3px; margin: 5px 0; overflow: hidden; }
-.posbar .seg { position: absolute; top: 0; bottom: 0; background: var(--scan); border-radius: 3px; transition: left .2s; }
+.posbar .seg { position: absolute; top: 0; bottom: 0; background: var(--scanbar); border-radius: 3px; transition: left .2s; }
 .spectrum { position: relative; display: flex; align-items: flex-end; gap: 1px; height: 64px; margin-top: 4px; border-bottom: 1px solid var(--line); }
-.spectrum i { flex: 1; background: var(--scan); opacity: .75; border-radius: 1px 1px 0 0; min-height: 2px; }
+.spectrum i { flex: 1; background: var(--scanbar); opacity: .75; border-radius: 1px 1px 0 0; min-height: 2px; }
 .spectrum i.x { background: var(--danger); opacity: .6; }
 .spectrum i.unused { display: none; }
 .spectrum .thr { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--hang); }
@@ -1229,7 +1232,7 @@ $("bClear").onclick = () => confirmBox("Clear the activity log?", "All entries a
 function applyTheme(t) {
   const light = t === "light";
   document.documentElement.dataset.theme = light ? "light" : "dark";
-  document.querySelector('meta[name="theme-color"]').content = light ? "#f1f5e4" : "#1a1a1a";
+  document.querySelector('meta[name="theme-color"]').content = light ? "#f3f4f1" : "#16181c";
 }
 try { applyTheme(localStorage.getItem("rfscan-theme")); } catch (e) {}
 $("bTheme").onclick = () => {
