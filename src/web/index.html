@@ -11,31 +11,34 @@
 <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
 <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
-<meta name="theme-color" content="#16181c">
+<meta name="theme-color" content="#0b0d0f">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <meta name="apple-mobile-web-app-title" content="rfscan">
 <style>
-/* palette of the project page: graphite #16181c, lime #d4fb3c, amber #f0c24b */
+/* palette: graphite #0b0d0f, olive green #799c0a, amber #f0c24b; the signal and window bars take
+   a cool hue opposite the green, so the amber marks on them stand out */
 /* dark theme (default) */
 :root {
-  --bg: #16181c;
-  --card: #202227;
-  --card2: #2a2d33;
-  --line: #33363d;
-  --text: #dcdee3;
-  --dim: #a2a5ac;
-  --faint: #74767c;
-  --accent: #d4fb3c;
+  --bg: #0b0d0f;
+  --card: #15171a;
+  --card2: #1f2226;
+  --line: #2a2d32;
+  --text: #bcbfc5;
+  --dim: #8f9299;
+  --faint: #6a6d73;
+  --accent: #799c0a;
   --on-accent: #0a0b0d;
-  --name: #d4fb3c;
-  --scan: #cfd2d8;
-  --scanbar: #dcf09a;
-  --lock: #d4fb3c;
+  --name: #799c0a;
+  --scan: #b4b7bd;
+  --scanbar: #6ea3bf;
+  --lock: #799c0a;
   --hang: #f0c24b;
   --pause: #b3a6e8;
   --danger: #ff5f56;
+  --danger-fill: #b23a32;
+  --on-danger: #e8e6e4;
   --digi: #e17bd2;
   --am: #6cb8ff;
   --nfm: #45d6b0;
@@ -44,7 +47,7 @@
   --radius: 8px;
   color-scheme: dark;
 }
-/* light theme, chosen with the theme button: the same graphite as text, the lime darkened to
+/* light theme, chosen with the theme button: the same graphite as text, the green darkened to
    olive so it stays readable on white */
 :root[data-theme="light"] {
   --bg: #f3f4f1;
@@ -58,11 +61,13 @@
   --on-accent: #f4ffd6;
   --name: #4d6a00;
   --scan: #2a2d33;
-  --scanbar: #7f9c2a;
+  --scanbar: #3f7a99;
   --lock: #5c7f00;
   --hang: #9a6b00;
   --pause: #65549f;
   --danger: #c0352c;
+  --danger-fill: #c0352c;
+  --on-danger: #fff;
   --digi: #a3338f;
   --am: #1f6fc0;
   --nfm: #0f8a6c;
@@ -147,7 +152,7 @@ body:not([data-tab="main"]) #main { display: none; }
 .snrval { font-size: 24px; font-weight: 800; }
 .snrval small { font-size: 14px; color: var(--dim); font-weight: 600; }
 .bar { position: relative; height: 14px; border-radius: 4px; background: var(--card2); margin: 6px 0 3px; overflow: hidden; }
-.bar .fill { position: absolute; inset: 0 auto 0 0; background: var(--lock); border-radius: 4px; transition: width .15s; }
+.bar .fill { position: absolute; inset: 0 auto 0 0; background: var(--scanbar); border-radius: 4px; transition: width .15s; }
 .hang .bar .fill { background: var(--faint); }
 /* the marks sit on whole pixels, so their outline is equal on both sides */
 .bar .mark { position: absolute; top: 0; bottom: 0; width: 3px; margin-left: -1px; background: var(--text); box-shadow: -2px 0 0 var(--bg), 2px 0 0 var(--bg);
@@ -186,7 +191,7 @@ body:not([data-tab="main"]) #main { display: none; }
 .btn.primary { background-color: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .btn.warn { color: var(--danger); border-color: var(--danger); background-color: transparent; }
 .btn.on { background-color: var(--lock); border-color: var(--lock); color: var(--on-accent); }
-.btn.danger { background-color: var(--danger); border-color: var(--danger); color: #fff; }
+.btn.danger { background-color: var(--danger-fill); border-color: var(--danger-fill); color: var(--on-danger); }
 .squelch { grid-column: 1 / -1; display: grid; grid-template-columns: 56px 1fr 56px; align-items: center; gap: 8px; }
 .squelch .val { text-align: center; }
 .squelch .val b { font-size: 21px; }
@@ -223,7 +228,7 @@ body.norec [data-l="recs"], body.norec [data-t="recs"] { display: none; }
 .listhead h2 { margin: 0; font-size: 17px; }
 .listhead .stats { flex: 1; }
 .listhead .smallbtn { background-color: var(--card); }
-.listhead .smallbtn.warn { background-color: var(--danger); border-color: var(--danger); color: #fff; }
+.listhead .smallbtn.warn { background-color: var(--danger-fill); border-color: var(--danger-fill); color: var(--on-danger); }
 /* list rows: the phone layout (two lines per entry, larger text); the column layout below keeps
    its own sizes */
 .lrow { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; padding: 8px 2px; border-bottom: 1px solid var(--line); font-size: 15px; cursor: pointer; }
@@ -244,7 +249,7 @@ body.norec [data-l="recs"], body.norec [data-t="recs"] { display: none; }
 .mode.digi { color: var(--digi); }
 /* recording: the mark in the lists, the REC pill while a file is written */
 .lrow .rec { color: var(--danger); font-weight: 800; }
-.recpill { color: #fff; background: var(--danger); border-color: var(--danger); }
+.recpill { color: var(--on-danger); background: var(--danger-fill); border-color: var(--danger-fill); }
 #itRec { accent-color: var(--danger); }
 #pane-activity .lrow.head .rh { display: none; }
 .smallbtn { min-height: 32px; padding: 0 10px; border-radius: 5px; border: 1px solid var(--line); background-color: var(--card2); font-weight: 700; font-size: 13px; cursor: pointer; }
@@ -310,7 +315,7 @@ nav.tabs button.active { color: var(--accent); }
   #pane-recs .lrow .acts { flex-basis: auto; }
 }
 .conn.off { background: var(--danger); }
-.toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 70px; z-index: 40; max-width: 90%; background: var(--danger); color: #fff; padding: 8px 14px; border-radius: 6px; font-weight: 600; display: none; }
+.toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 70px; z-index: 40; max-width: 90%; background: var(--danger-fill); color: var(--on-danger); padding: 8px 14px; border-radius: 6px; font-weight: 600; display: none; }
 .toast.show { display: block; }
 .empty { color: var(--faint); padding: 10px 2px; font-size: 13px; }
 .about a { color: var(--dim); }
@@ -324,6 +329,10 @@ body.nolocal #bMute { display: none; }
 .btn, .smallbtn, .listtabs button, .theme { background-image: var(--btn-grad); transition: filter .15s; }
 @media (hover: hover) {
   .btn:hover:not(:disabled), .smallbtn:hover:not(:disabled), .listtabs button:hover, .theme:hover { filter: var(--hover); }
+}
+/* on a dark fill the strong highlight of the light theme looks like a bulge, so it is much weaker */
+:root[data-theme="light"] :is(.btn.primary, .btn.on, .btn.danger, .listhead .smallbtn.warn, .listtabs button.active, .durs .smallbtn.on, #pane-recs .lrow .acts .smallbtn.on) {
+  --btn-grad: linear-gradient(180deg, rgba(255, 255, 255, .12), rgba(255, 255, 255, 0) 60%, rgba(0, 0, 0, .05));
 }
 /* modulation tags: tinted with the mode color, with a soft gradient */
 .mode.am { --m: var(--am); }
@@ -1256,7 +1265,7 @@ $("bClear").onclick = () => confirmBox("Clear the activity log?", "All entries a
 function applyTheme(t) {
   const light = t === "light";
   document.documentElement.dataset.theme = light ? "light" : "dark";
-  document.querySelector('meta[name="theme-color"]').content = light ? "#f3f4f1" : "#16181c";
+  document.querySelector('meta[name="theme-color"]').content = light ? "#f3f4f1" : "#0b0d0f";
 }
 try { applyTheme(localStorage.getItem("rfscan-theme")); } catch (e) {}
 $("bTheme").onclick = () => {
