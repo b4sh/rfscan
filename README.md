@@ -29,7 +29,7 @@ It works with any receiver supported by [SoapySDR](https://github.com/pothosware
 - **Your own server.** A built-in web GUI shows, plays and controls the scanner in a browser on a PC or a phone, also with the screen of an Android phone locked, and several browsers can be connected at once. `--web-gui 0.0.0.0:7373` opens it to the home network, and on Linux a systemd service starts rfscan at boot on a computer without a monitor (`install.sh --service`).
 - **Or at the computer.** rfscan also plays the audio on the local sound card and writes a console log; `--tui` replaces the log with a text interface.
 
-![rfscan scanning the 2 m band in the TUI](docs/screenshot-tui.png)
+![rfscan web GUI: scanner status, controls and the detection history](docs/screenshot-web.webp)
 
 ## Tested receivers
 
