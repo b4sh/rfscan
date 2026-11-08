@@ -13,7 +13,7 @@
 
 # rfscan
 
-A fast radio scanner for SDR receivers, running in the terminal. rfscan sweeps frequency ranges or a list of channels, stops on a signal, demodulates it (AM or narrowband FM) and plays it, then goes on scanning when the transmission ends. Digital voice (DMR, P25, D-STAR, YSF, NXDN and others) is played through [DSD-FME](https://github.com/lwvmobile/dsd-fme). A built-in web page lets you watch, hear and control the scanner from a phone.
+A fast radio scanner for SDR receivers that you run as your own small server: on a Raspberry Pi or a PC next to the antenna, listened to and controlled in a browser on a PC or a phone. rfscan sweeps frequency ranges or a list of channels, stops on a signal, demodulates it (AM or narrowband FM) and plays it, then goes on scanning when the transmission ends. Digital voice (DMR, P25, D-STAR, YSF, NXDN and others) is played through [DSD-FME](https://github.com/lwvmobile/dsd-fme). Local audio and a text interface in the terminal (TUI) are available on the computer it runs on.
 
 > [!IMPORTANT]
 > **Set the settle time for your receiver before the first scan.** After every retune a receiver keeps delivering samples of the previous frequency for a while, from a few to over a hundred milliseconds. If `--settle` is shorter than that, rfscan sees signals in the wrong places and scanning does not work properly. The default of 20 ms fits an Airspy, not an RTL-SDR: an RTL-SDR needs about 63 ms with smaller stream buffers (`--stream-args "bufflen=16384,buffers=64"`) and over 110 ms without them. `rfscan --calibrate` measures the right value for your receiver. An RTL-SDR also needs `--sample-rate 2.4M`: higher rates are unstable and can make the dongle stop responding. See [Receiver setup](https://github.com/b4sh/rfscan/blob/main/DOC.md#receiver-setup).
@@ -25,8 +25,9 @@ It works with any receiver supported by [SoapySDR](https://github.com/pothosware
 - **Wide windows instead of single channels.** One tuner setting covers many channels at once: about 80% of the sample rate, e.g. 4.8 MHz at 6 MSps. An FFT measures the power of every channel in the window, so a whole band is checked with a handful of retunes. On an Airspy Mini that is about 220 MHz per second.
 - **Detection by signal-to-noise ratio.** The noise floor is measured in every window, and a channel that rises a set number of dB above it (`--squelch-snr`) stops the scanner. A hit is first confirmed at a different tuner frequency, so receiver artifacts (images, spurs) do not stop it, and the DC spike in the middle of the band never falls on a channel.
 - **Listening.** On a stop the channel is mixed down digitally and demodulated; the audio goes through a 300-3000 Hz filter, an AGC (stations sound equally loud), speech noise reduction (RNNoise) and a limiter. After the signal disappears the scanner waits a moment (`--pause`) and goes on.
-- **Knowledge of your band.** A channel file gives names and modes to frequencies, an exclusion list skips interference and unwanted channels (one key in the TUI), an activity log counts how long each frequency was active, and the audio of chosen channels can be recorded to WAV files (`--record-dir`).
-- **Three ways to use it.** By default a console log with a web GUI for a phone or a browser (`http://127.0.0.1:7373/`, `--web-gui`), a text interface on request (`--tui`), and on Linux a systemd service for a receiver without a monitor (`install.sh --service`).
+- **Knowledge of your band.** A channel file gives names and modes to frequencies, an exclusion list skips interference and unwanted channels (one tap in the web GUI, one key in the TUI), an activity log counts how long each frequency was active, and the audio of chosen channels can be recorded to WAV files (`--record-dir`).
+- **Your own server.** A built-in web GUI shows, plays and controls the scanner in a browser on a PC or a phone, also with the screen of an Android phone locked, and several browsers can be connected at once. `--web-gui 0.0.0.0:7373` opens it to the home network, and on Linux a systemd service starts rfscan at boot on a computer without a monitor (`install.sh --service`).
+- **Or at the computer.** rfscan also plays the audio on the local sound card and writes a console log; `--tui` replaces the log with a text interface.
 
 ![rfscan scanning the 2 m band in the TUI](docs/screenshot-tui.png)
 
@@ -69,10 +70,16 @@ Tested on Windows 11 and on a Raspberry Pi 4 (4 GB, Debian 13 64-bit). On the Ra
    rfscan --scan-range 118M-137M:am              # airband, AM, 8.33 kHz channels
    rfscan --scan-range 144M-146M --scan-range 430M-440M:12.5k
    rfscan --scan-channels 145.5M,118.1M:am       # single channels
-   rfscan --web-gui 0.0.0.0:7373                 # the web page also for a phone in the home network
-   rfscan --tui                                  # the text interface instead of the console log
    ```
-   The web page is at `http://127.0.0.1:7373/` (the link is printed at startup). In the TUI: `q` quit, `space` skip, `x` exclude the frequency, `p` pause, `a` activity, `+`/`-` squelch.
+   The web page is at `http://127.0.0.1:7373/` (the link is printed at startup). Tap **Audio** to hear the scanner in the browser.
+7. **Make it a server** for your PC and phone. Add to `rfscan.conf`:
+   ```
+   web-gui = "0.0.0.0:7373"     # the web page for the home network
+   local-audio = "off"          # the sound only in the browsers
+   ```
+   start `rfscan` and open the printed link, with its access token, on the phone. The page is meant for a home network or a VPN only: do not forward its port on the router. On Linux `packaging/linux/install.sh --service` starts rfscan at boot. Details are in [DOC.md](DOC.md#running-rfscan-as-a-server).
+
+**At the computer instead:** without these two settings rfscan also plays the audio on the local sound card, and `rfscan --tui` gives the text interface (`q` quit, `space` skip, `x` exclude the frequency, `p` pause, `a` activity, `+`/`-` squelch).
 
 `rfscan -h` lists the most used options, `rfscan --help` all of them. The full description is in [DOC.md](DOC.md).
 
