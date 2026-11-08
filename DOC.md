@@ -2,8 +2,12 @@
 
 The full description of rfscan's functions. A short introduction and the quick start are in [README.md](README.md); `rfscan -h` lists the most used options, `rfscan --help` all of them.
 
+rfscan is meant to run as your own small server: on a Raspberry Pi or a PC next to the antenna, listened to and controlled in a browser on a PC or a phone. See [Running rfscan as a server](#running-rfscan-as-a-server). Local audio and the text interface (TUI) are available on the computer it runs on.
+
 - [Installation](#installation)
 - [Receiver setup](#receiver-setup)
+- [Running rfscan as a server](#running-rfscan-as-a-server)
+- [Web GUI](#web-gui)
 - [Scanning](#scanning)
 - [Detection and stopping](#detection-and-stopping)
 - [Channel file: names and modes](#channel-file-names-and-modes)
@@ -13,9 +17,8 @@ The full description of rfscan's functions. A short introduction and the quick s
 - [Audio](#audio)
 - [Digital voice through DSD-FME](#digital-voice-through-dsd-fme)
 - [Audio recording](#audio-recording)
-- [TUI](#tui)
 - [Console mode and log file](#console-mode-and-log-file)
-- [Web GUI](#web-gui)
+- [TUI](#tui)
 - [IQ recording](#iq-recording)
 - [Configuration file](#configuration-file)
 - [Files](#files)
@@ -63,32 +66,7 @@ On Linux `--list-devices` lists every ALSA device of a sound card (`hw:`, `plugh
 
 `rfscan --list-devices` shows the receivers SoapySDR sees, with their frequency ranges, sample rates, gain stages, sample format, driver settings and stream arguments, plus the SoapySDR version and module diagnostics (useful when no receiver is found). Sound cards (SoapySDR `driver=audio`) are listed but never used as receivers. `--device` chooses a receiver in Soapy syntax, e.g. `--device driver=rtlsdr` or `--device driver=airspy,serial=...`; without it rfscan takes the first free one.
 
-**As a service (Linux, Raspberry Pi).** `packaging/linux/install.sh --service` also installs a systemd service, `/etc/systemd/system/rfscan.service`, and starts it: rfscan runs as the user who ran the script, starts at boot, is started again after an error (e.g. a receiver not plugged in yet) and needs no `screen` or open SSH session. It is started with `--console-level warn` (only errors, warnings and the web GUI link go to the system log, which spares the SD card), and every other setting comes from that user's `~/.config/rfscan/rfscan.conf`, e.g.
-
-```
-scan-range = ["144M-146M", "430M-440M:12.5k"]
-gain = "agc=true"
-web-gui = "0.0.0.0:7373"     # the web page for a phone in the home network
-local-audio = "off"          # no sound card
-log = "/home/USER/rfscan.log"  # optional: the detected transmissions in a file of their own
-```
-
-```
-journalctl -u rfscan -f              # the log, with the web GUI link at the start
-sudo systemctl restart rfscan        # after changing rfscan.conf
-sudo systemctl stop rfscan           # stops cleanly: the activity log is saved, the receiver released
-sudo systemctl disable --now rfscan  # stop it and do not start it at boot
-```
-
-Another console level for the service (the command line of the service wins over `rfscan.conf`): `sudo systemctl edit rfscan`, add
-
-```
-[Service]
-ExecStart=
-ExecStart=/usr/local/bin/rfscan --console-level info
-```
-
-and restart the service. `install.sh --uninstall` removes the service together with the program.
+Next: [set up the receiver](#receiver-setup), then [run rfscan as a server](#running-rfscan-as-a-server).
 
 ## Receiver setup
 
@@ -127,6 +105,88 @@ with your other settings (sample rate, gain, stream arguments) on the command li
 
 `rfscan --bench --scan-range ...` retunes through the scan plan without detection and reports the retune time, windows per second, MHz per second and overflows (10 s, or `--duration`). Useful for comparing sample rates and stream arguments.
 
+## Running rfscan as a server
+
+The usual way to run rfscan: on a computer next to the antenna (a Raspberry Pi or any PC, without a monitor or a sound card), scanning all the time, while you watch, hear and control it in a browser on a PC or a phone, in the home network or over a VPN. Several browsers can be connected at once.
+
+Out of the box rfscan serves its web page to its own computer only and plays the audio on its sound card. Two settings make it a server. Put them in the [configuration file](#configuration-file), together with those of your [receiver](#receiver-setup):
+
+```
+# ~/.config/rfscan/rfscan.conf
+scan-range = ["144M-146M", "430M-440M:12.5k"]
+gain = "agc=true,VGA=7"      # the values for your receiver
+settle = 20
+web-gui = "0.0.0.0:7373"     # the web page for the home network
+local-audio = "off"          # the sound only in the browsers
+```
+
+Then start `rfscan`. It prints the link with the address of the computer and the access token:
+
+```
+web GUI: http://192.168.1.20:7373/?t=TOKEN
+```
+
+Open the link on the phone or the PC, bookmark it (the token stays the same after a restart) and tap **Audio**. For sound with the phone locked turn on **Background**. The [web GUI](#web-gui) section describes the page.
+
+- `local-audio = "off"` is needed on a computer without a sound card, where rfscan otherwise stops at startup with an error.
+- The page has no encryption and is meant for a home network or a VPN only: do not forward its port on the router. See [Security](#web-gui).
+- On Windows rfscan runs as a server in its console window (there is no service) and Windows may ask to allow it through the firewall.
+
+### As a service (Linux, Raspberry Pi)
+
+`packaging/linux/install.sh --service` also installs a systemd service, `/etc/systemd/system/rfscan.service`, and starts it: rfscan runs as the user who ran the script, starts at boot, is started again after an error (e.g. a receiver not plugged in yet) and needs no `screen` or open SSH session. It is started with `--console-level warn` (only errors, warnings and the web GUI link go to the system log, which spares the SD card), and every other setting comes from that user's `~/.config/rfscan/rfscan.conf` (the example above). The detected transmissions then go only to a log file of their own, if you want one: `log = "/home/USER/rfscan.log"`.
+
+```
+journalctl -u rfscan -f              # the log, with the web GUI link at the start
+sudo systemctl restart rfscan        # after changing rfscan.conf
+sudo systemctl stop rfscan           # stops cleanly: the activity log is saved, the receiver released
+sudo systemctl disable --now rfscan  # stop it and do not start it at boot
+```
+
+Another console level for the service (the command line of the service wins over `rfscan.conf`): `sudo systemctl edit rfscan`, add
+
+```
+[Service]
+ExecStart=
+ExecStart=/usr/local/bin/rfscan --console-level info
+```
+
+and restart the service. `install.sh --uninstall` removes the service together with the program.
+
+### On one computer: local audio and the TUI
+
+rfscan also works as an ordinary program on the computer you sit at. With the default settings it plays the audio on the sound card (`--audio-device` chooses another output, see [Audio](#audio)) and the web page is at `http://127.0.0.1:7373/`. `--tui` replaces the console log with the [text interface](#tui), where keys control the scanner; the web page keeps running next to it. The two can be combined: with the local audio on and the page open to the home network, **Mute PC** on the page mutes the computer.
+
+## Web GUI
+
+The web page is the main way of using rfscan: watching, hearing and controlling the scanner from a phone or a desktop browser, wherever the receiver is. rfscan always starts it. By default it listens on this computer only, `http://127.0.0.1:7373/`; `--web-gui [HOST:]PORT` changes the address and `--web-gui off` turns it off:
+
+```
+rfscan --scan-range 144M-146M                          # this computer only: http://127.0.0.1:7373/
+rfscan --scan-range 144M-146M --web-gui 0.0.0.0:7373   # the home network
+rfscan --scan-range 144M-146M --web-gui off            # no web page
+```
+
+When the port is taken (e.g. by another rfscan), rfscan stops with an error; choose another port or `--web-gui off`.
+
+rfscan prints the link at startup. The **Scanner** tab shows the frequency or channel number with its name, the state, the signal level, while scanning the spectrum of the current window and its tuner frequency, and has buttons for pause, skip, exclude (with a note, for good or for 10 / 30 / 60 minutes), undo, squelch, noise reduction and audio. The other tabs:
+
+- **History** and **Activity:** tapping an entry names the channel, sets the `digi` mode, switches its audio recording or excludes it. An activity entry can also be deleted, and the activity log is sorted by tapping a column header.
+- **Exclusions:** tapping one edits its note, keeps a timed one for good or deletes it; a timed one shows the minutes left.
+- **Recordings** (with `--record-dir`): play or delete.
+
+The page has a dark and a light theme. It works with the console mode and with `--tui`, and several browsers can be connected at once, each with full control.
+
+The audio is sent to the browser as 8 kHz μ-law (64 kbit/s, 300-3000 Hz) after **Audio** is tapped (browsers need a tap before playing sound); the delay is about 0.2-0.3 s more than the local audio. With `--local-audio off`, the usual setting of a server, the page is the only audio, so it turns its audio on by itself; when the browser still waits for a tap, the button shows **Tap to start audio** and the first tap anywhere on the page starts the sound. An ordinary browser tab usually needs this tap, because browsers block sound until a page has been touched. A page installed as an app (PWA) started without a tap in Chrome on a phone and on a PC. With the local audio on (the default) the computer keeps playing next to the browsers, and **Mute PC** mutes it (like `m` in the TUI).
+
+**Minimized or locked.** The audio has two modes, chosen with the **Background** button. Every time the page opens, Background is off. By default **Audio** has the lowest delay and keeps playing with the page minimized on a PC, but a locked phone stops it. With **Background** on, the audio comes as an HTTP stream at `/stream.wav` (uncompressed, 128 kbit/s instead of 64 kbit/s, with the same token), also while the page is open: Chrome on Android keeps playing with the screen locked, also over plain HTTP. It starts after about 4 s of silence and stays about 3 s behind. The browser shows its own media controls with the rfscan icon: pause stops the sound of this browser, and play restarts the stream, again after about 4 s. The scanner keeps scanning and other browsers are not affected. After a pause the **Audio** button shows **Audio paused**, and tapping it also restarts the sound. Firefox on Android loses the connection soon after locking, so there is no sound while locked; the page reconnects by itself after unlocking. A page with the audio off is left to sleep, which saves the battery. A battery saver of the phone can still close the browser.
+
+**Security.** The web GUI is meant for a home network or a VPN only. It uses plain HTTP (no HTTPS, no encryption) and has no advanced security: do not expose it to the internet (no port forwarding on the router). On an address other than `127.0.0.1` the page needs a token in the link (`http://IP:PORT/?t=TOKEN`): a random one created at the first start and kept in `~/.config/rfscan/web-token` (so a bookmark on the phone keeps working after a restart; delete the file for a new token), or a fixed one from `--web-token TOKEN` (e.g. in `rfscan.conf`), which takes precedence. Windows may ask to allow rfscan through the firewall the first time it listens on the network.
+
+**Home screen.** Added to the home screen of a phone, the page opens as an app without the address bar: on iOS also over plain HTTP, on Android only over HTTPS (e.g. through a reverse proxy) or on `localhost`; otherwise Android opens it as a browser tab. In Chrome on Android, with rfscan behind a reverse proxy with HTTPS, choose **Install app** (not **Create shortcut**): the installed app opens without the address bar and with the colors of the page in the system bars. The shortcut keeps the link with the token, which stays the same after restarts (`~/.config/rfscan/web-token` or `--web-token`).
+
+**Behind a reverse proxy** (e.g. nginx with HTTPS and its own login): the page uses a WebSocket at `/ws`, so the proxy must pass WebSocket connections (in nginx `proxy_http_version 1.1; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade";`), must not buffer the audio stream at `/stream.wav` (nginx follows the `X-Accel-Buffering: no` header sent by rfscan; other proxies may need buffering turned off), and the page must be served at the root of a host name (e.g. `https://rfscan.example.org/`), not under a sub-path. With the proxy on the same computer, run rfscan with `--web-gui 127.0.0.1:PORT`: no token is needed and the proxy controls the access. Never leave such a proxy without its login (e.g. HTTP basic authentication): the page controls the scanner and edits the exclusion and channel files, and behind a proxy on `127.0.0.1` no token protects it.
+
 ## Scanning
 
 There are two scan modes; one of them is used at a time.
@@ -159,7 +219,7 @@ Without a scan mode rfscan scans 144-146 MHz, NFM, 12.5 kHz.
 
 ## Channel file: names and modes
 
-The channel file (default `~/.config/rfscan/rfscan-channels.txt`, or `--channels-file`) gives names and modes to known frequencies. It is read at every start; rfscan writes it only when you name a channel, mark it `digi` or switch its recording in the TUI or the web GUI. One channel per line, `#` starts a comment:
+The channel file (default `~/.config/rfscan/rfscan-channels.txt`, or `--channels-file`) gives names and modes to known frequencies. It is read at every start; rfscan writes it only when you name a channel, mark it `digi` or switch its recording in the web GUI or the TUI. One channel per line, `#` starts a comment:
 
 ```
 # rfscan: channels
@@ -172,7 +232,7 @@ The channel file (default `~/.config/rfscan/rfscan-channels.txt`, or `--channels
 
 Line syntax: `FREQUENCY_MHz [am|fm|digi] [rec] [bw=WIDTH] ["name"]`; the mode, `rec` and `bw=` in any order before the name, everything except the frequency optional. Names may contain any characters (UTF-8). A line that cannot be read gives a warning with its number and is skipped.
 
-- The name is shown when the scanner stops on the frequency (TUI, web GUI, console, history, activity, `--report`), both when scanning a range and channels. Unknown frequencies show no name.
+- The name is shown when the scanner stops on the frequency (web GUI, TUI, console, history, activity, `--report`), both when scanning a range and channels. Unknown frequencies show no name.
 - The mode of the file applies also while scanning a range: a known `digi` frequency in an NFM range is handled as `digi`. Precedence: the mode in `--scan-channels F:MODE`, then the file, then the range suffix, then `--mode`. The `bw=` of the file sets the demodulator width.
 - `rec` marks a channel whose audio is recorded (see [Audio recording](#audio-recording)).
 - In range mode an entry matches the nearest grid channel within half a step, and rfscan listens on that grid channel. An entry farther than 1% of the step from the grid (e.g. `433.450` in `433.420M-433.470M` with a 12.5 kHz step) gives a warning at startup: choose the range start or step so that the grid includes it.
@@ -187,7 +247,9 @@ Frequencies you do not want to stop on (interference, digital data, constant car
 433.920       # data bursts
 ```
 
-In the TUI `x` excludes the current frequency (a popup asks for an optional note), `X` also the adjacent channels (`--exclude-wide N` on each side, default 2), `u` undoes the last exclusion; the file is written at once. `Tab` in the popup makes it a timed exclusion for 10, 30 or 60 minutes instead: it is not written to the file, ends by itself and is gone after a restart. The `e` screen lists the exclusions (the timed ones first, with the minutes left), `Enter` edits the note of one (only that line's comment in the file changes), `d` removes one and `s` keeps a timed one for good (written to the file with its note). `--exclude F,...` adds temporary exclusions for this run only. An exclusion applies to the frequency in every range and channel list.
+In the web GUI **Exclude** excludes the current frequency: a sheet asks for an optional note and the duration, and **Exclude ±N channels** also takes the adjacent channels (`--exclude-wide N` on each side, default 2). **Undo** undoes the last exclusion; the file is written at once. A timed exclusion, for 10, 30 or 60 minutes, is not written to the file, ends by itself and is gone after a restart. The **Exclusions** tab lists them (a timed one with the minutes left); tapping one edits its note (only that line's comment in the file changes), keeps a timed one for good (written to the file with its note) or deletes it.
+
+In the TUI `x` and `X` exclude the frequency (with the adjacent channels), a popup asks for the note, `Tab` in it chooses a timed exclusion, and `u` undoes the last one. The `e` screen lists the exclusions (the timed ones first), `Enter` edits a note, `d` removes one and `s` keeps a timed one for good. `--exclude F,...` adds temporary exclusions for this run only. An exclusion applies to the frequency in every range and channel list.
 
 ## Activity log
 
@@ -198,11 +260,11 @@ rfscan counts how many seconds of audio it played on each frequency (only while 
 438.800:12.0s hits=2 last=2026-10-13T13:40:03 mode=digi
 ```
 
-`rfscan --report` prints it as a table sorted by time (frequency, mode, name, time, hits, last). The activity screen (`a`) in the TUI and the Activity tab of the web GUI show it too; there you can sort it by any column, name a channel (saved to the channel file, also as `digi`), exclude it, delete one entry, or clear the whole log. `--activity-reset` moves the old log to `.bak` and starts from zero.
+`rfscan --report` prints it as a table sorted by time (frequency, mode, name, time, hits, last). The Activity tab of the web GUI and the activity screen (`a`) in the TUI show it too; there you can sort it by any column, name a channel (saved to the channel file, also as `digi`), exclude it, delete one entry, or clear the whole log. `--activity-reset` moves the old log to `.bak` and starts from zero.
 
 ## Airband channel numbers (8.33 kHz)
 
-In the airband (118-137 MHz) rfscan shows channel numbers as used by pilots, controllers, AIP and charts, not the actual transmit frequencies. On the 8.33 kHz raster they differ: the channel `118.035` is transmitted on 118.0333 MHz, `126.855` on 126.8500 MHz. The lock screen shows both:
+In the airband (118-137 MHz) rfscan shows channel numbers as used by pilots, controllers, AIP and charts, not the actual transmit frequencies. On the 8.33 kHz raster they differ: the channel `118.035` is transmitted on 118.0333 MHz, `126.855` on 126.8500 MHz. The web GUI and the lock screen of the TUI show both, e.g.
 
 ```
 118.035 MHz
@@ -216,26 +278,26 @@ The 8.33 kHz raster is the default. Channels that stay on the 25 kHz raster (e.g
 123.100 am "SAR"
 ```
 
-You can type channel numbers everywhere (channel file, exclusion file, `--exclude`, `--scan-channels 118.035M:am`): an airband value with at most three decimal places is a channel number, a value with four or more decimal places (`118.0333`) is an actual frequency. Entries added from the TUI are written as channel numbers.
+You can type channel numbers everywhere (channel file, exclusion file, `--exclude`, `--scan-channels 118.035M:am`): an airband value with at most three decimal places is a channel number, a value with four or more decimal places (`118.0333`) is an actual frequency. Entries added from the web GUI or the TUI are written as channel numbers.
 
 ## Audio
 
-The audio chain: demodulation, FM de-emphasis (`--deemph`, default 75 µs, `off`), a band-pass filter (`--audio-band`, default 300-3000 Hz, removes subaudible tones), AGC (`--agc on|off`, target levels `--agc-target` for NFM and `--agc-target-am` for AM, maximum gain `--agc-max-gain`), speech noise reduction, a limiter and short fades at the start and end of a transmission. `--audio-device NAME` chooses the output (the list is in `--list-devices`), `--local-audio off` turns the local output off (e.g. a computer without a sound card, listening only in the web GUI).
+The audio chain: demodulation, FM de-emphasis (`--deemph`, default 75 µs, `off`), a band-pass filter (`--audio-band`, default 300-3000 Hz, removes subaudible tones), AGC (`--agc on|off`, target levels `--agc-target` for NFM and `--agc-target-am` for AM, maximum gain `--agc-max-gain`), speech noise reduction, a limiter and short fades at the start and end of a transmission. The result goes to the browsers ([web GUI](#web-gui)), to the recordings and to the local output. `--local-audio off` turns the local output off, as on a [server](#running-rfscan-as-a-server) or a computer without a sound card; `--audio-device NAME` chooses it (the list is in `--list-devices`).
 
 **Noise reduction.** The analog audio (AM and NFM) goes through speech noise reduction (RNNoise, through the `nnnoiseless` crate). It is on by default and works best on AM, where there is more noise than on NFM. Digital (`digi`) channels never go through it.
 
-| Control | Option | TUI key |
-|---|---|---|
-| on / off | `--nr rnnoise` / `--nr off` | `n` |
-| strength | `--nr-strength PERCENT` (0-100, default 60) | `<` / `>` (or `,` / `.`), steps of 10% |
+| Control | Option | Web GUI | TUI key |
+|---|---|---|---|
+| on / off | `--nr rnnoise` / `--nr off` | the **NR** button | `n` |
+| strength | `--nr-strength PERCENT` (0-100, default 60) | `−` / `+` next to it | `<` / `>` (or `,` / `.`), steps of 10% |
 
 The strength mixes the denoised audio with the original: 0% is half of each, 100% the denoised audio only. The reduction delays the audio by 10 ms.
 
 ## Digital voice through DSD-FME
 
-rfscan does not decode digital signals. On channels in `digi` mode it sends the raw FM discriminator to DSD-FME, which decodes the voice and sends it back to rfscan over UDP; rfscan plays it through its own audio output (and the web GUI), mixed with the analog channels. The noise reduction does not apply to the decoded voice.
+rfscan does not decode digital signals. On channels in `digi` mode it sends the raw FM discriminator to DSD-FME, which decodes the voice and sends it back to rfscan over UDP; rfscan plays it in the web GUI and on its local audio output, mixed with the analog channels. The noise reduction does not apply to the decoded voice.
 
-A `digi` channel is marked in the channel file (`438.800 digi "DMR REPEATER"`) or on the command line: `--scan-channels 438.8M:digi`, `--scan-range 438M-439M:digi`, `--mode digi`. On the activity screen `[l]` and then `[Tab]` marks the selected channel as `digi` in the channel file (the name is optional then); the change applies at once. Without `--digi` or `--digi-tcp`, `digi` channels from the channel file are skipped, and an explicit `digi` on the command line is an error.
+A `digi` channel is marked in the channel file (`438.800 digi "DMR REPEATER"`) or on the command line: `--scan-channels 438.8M:digi`, `--scan-range 438M-439M:digi`, `--mode digi`. In the web GUI tapping an entry of the history or the activity log and switching on its `digi` mode marks the channel in the channel file, as do `[l]` and then `[Tab]` on the activity screen of the TUI (the name is optional then); the change applies at once. Without `--digi` or `--digi-tcp`, `digi` channels from the channel file are skipped, and an explicit `digi` on the command line is an error.
 
 ### DSD-FME started by rfscan (`--digi`)
 
@@ -257,7 +319,7 @@ cd dsd-fme && cmake -S . -B build && cmake --build build -j4 && sudo cmake --ins
 
 This installs `dsd-fme` to `/usr/local/bin`, where rfscan finds it without `--dsd-fme`.
 
-DSD-FME's console output goes to `~/.config/rfscan/dsd-fme.log`; while the scanner is on a `digi` channel, the TUI shows its last lines in a window over the detection history (e.g. ` SLOT 1 TGT=1234 SRC=567 Group` for DMR). The event log of finished calls is in `~/.config/rfscan/dsd-fme-events.log`. `--dsd-fme-logs DIR` puts both files in another (existing) directory: needed when several rfscan instances run with `--digi`, e.g. one configuration file per receiver with its own `dsd-fme-logs`, `activity-file` and `device`. If DSD-FME exits during scanning, rfscan restarts it (at most 3 times per minute); the `[ DIGI ]` line on the lock screen and the `digi` statistic show its state and whether its voice is playing.
+DSD-FME's console output goes to `~/.config/rfscan/dsd-fme.log`; while the scanner is on a `digi` channel, the TUI shows its last lines in a window over the detection history (e.g. ` SLOT 1 TGT=1234 SRC=567 Group` for DMR). The event log of finished calls is in `~/.config/rfscan/dsd-fme-events.log`. `--dsd-fme-logs DIR` puts both files in another (existing) directory: needed when several rfscan instances run with `--digi`, e.g. one configuration file per receiver with its own `dsd-fme-logs`, `activity-file` and `device`. If DSD-FME exits during scanning, rfscan restarts it (at most 3 times per minute); the `DIGI` line of the web GUI, the `[ DIGI ]` line on the TUI lock screen and the `digi` statistic show its state and whether its voice is playing.
 
 ### DSD-FME started by hand (`--digi-tcp`)
 
@@ -283,7 +345,7 @@ The discriminator stream is PCM s16le, mono, 48 kHz, continuous (about 96,000 B/
 rfscan --scan-range 144M-146M --record-dir D:\Radio\recordings
 ```
 
-records the audio of the channels marked `rec` in the [channel file](#channel-file-names-and-modes). A channel is marked (or unmarked) with `r` on a detection history row or on the activity screen in the TUI, or with **Record audio** in the entry sheet of the web GUI; the change is saved to the channel file and applies at once, also during a transmission. A ✓ in the `rec` column of the history and the activity list shows the marked channels, and `REC` in the header while a file is being written.
+records the audio of the channels marked `rec` in the [channel file](#channel-file-names-and-modes). A channel is marked (or unmarked) with **Record audio** in the entry sheet of the web GUI, or with `r` on a detection history row or on the activity screen in the TUI; the change is saved to the channel file and applies at once, also during a transmission. A ✓ in the `rec` column of the history and the activity list shows the marked channels, and `REC` in the header while a file is being written.
 
 - **Directory.** `--record-dir DIR` (also in `rfscan.conf`) must exist: rfscan does not create it, and a missing one is an error at startup. Without the option nothing is recorded (`r` only says so). Each channel gets its own subdirectory: the frequency (in the airband the channel number), then the name with spaces as `_`, without characters Windows does not allow in file names and with accented letters written in plain ASCII, e.g. `145.550-SIMPLEX` or `433.450-Lodz_R1`. Renaming a channel starts a new subdirectory; the old recordings stay where they are.
 - **Files.** One WAV file per transmission, named by its local start time, e.g. `20261025-143012.wav`. A return of the signal during the pause (`--pause`) continues the same file, and the silence of the pause is not recorded. The format is the audio of the web GUI: 8 kHz mono G.711 μ-law (about 29 MB per hour of audio) after the 300-3000 Hz filter, with the noise reduction, and on `digi` channels the voice decoded by DSD-FME. It plays in common players (Windows, VLC, Audacity).
@@ -294,25 +356,6 @@ records the audio of the channels marked `rec` in the [channel file](#channel-fi
 - In the web GUI **▶ play** plays a file in the browser (independent of the scanner audio), **✕ del** deletes it after a confirmation. The red **Delete all** button in the header deletes, after a confirmation, all the recordings, or on a channel's file list all the recordings of that channel.
 - In the TUI `Enter` on a channel shows its files, `Enter` on a file plays or stops it on the local audio output, `d` deletes it after a confirmation, `D` deletes all the recordings (on the channel list) or all the recordings of the channel (on the file list) after a confirmation, `Esc` goes back. While a file plays, the scanner audio is muted (scanning and recording go on) and `▶ PLAY` is shown in the header; with `--local-audio off` there is no local output and the TUI only says so.
 - Only files inside `--record-dir` can be deleted, never the one being recorded; a channel subdirectory left empty is removed. Delete all skips the file being recorded and leaves other files and `--record-dir` itself in place. The log has a `REC DEL` line for each deleted file, and for Delete all one line with the directory and the number of deleted files.
-
-## TUI
-
-`--tui` starts the text interface instead of the console mode (it needs a terminal as the output; the web GUI keeps running next to it). The layout adapts to the window size: from about 100x30 the frequency is shown in a large font, down to 80x24 in a compact layout. The scanning screen shows the range, the position in it, the mini-spectrum of the current window and the statistics; the lock screen shows the frequency, the name, the SNR bar with the thresholds and the measurements; below is the detection history.
-
-| Key | Action |
-|---|---|
-| `q`, Ctrl+C | quit |
-| `p` | pause scanning |
-| space | skip the current signal once |
-| `x` / `X` | exclude the current frequency (with adjacent channels), with an optional note; `Tab` in the popup: for good or for 10 / 30 / 60 min |
-| `u` | undo the last exclusion |
-| `+` / `-` | squelch threshold |
-| `m` | mute |
-| `n`, `<` / `>` | noise reduction on/off, strength |
-| `a` | activity screen (`←` / `→` sort column, `s` reverse the order, `l` name a channel, `Tab` in the popup: `digi`, `r` record its audio on/off, `x` exclude, `d` delete the entry, `c` clear) |
-| `e` | exclusions screen (`Enter` edit the note, `d` remove, `s` keep a timed exclusion for good) |
-| `w` | recordings screen, with `--record-dir` (`Enter` a channel's files, `Enter` play / stop a file, `d` delete it, `D` delete all, `Esc` back) |
-| `Tab` | select a detection history row (arrows move, `l` name the channel, `r` record its audio on/off, `x` / `X` exclude it (with adjacent channels), `Tab` / `Esc` back) |
 
 ## Console mode and log file
 
@@ -331,29 +374,24 @@ By default rfscan writes events and the log to the console (without `--tui`; the
 
 `--log FILE` appends a log with the date and time of every line: with `--log-level info` (default) the transmissions and the session start and end, with `--log-level debug` everything, including the window list of the scan plan. `--duration SECONDS` ends the run after the given time.
 
-## Web GUI
+## TUI
 
-rfscan always starts a web page for watching, hearing and controlling the scanner from a phone or a desktop browser, e.g. for a receiver without a monitor near the antenna. By default it listens on this computer only, `http://127.0.0.1:7373/`; `--web-gui [HOST:]PORT` changes the address and `--web-gui off` turns it off:
+`--tui` starts the text interface instead of the console log, an option for working at the computer rfscan runs on (it needs a terminal as the output; the web GUI keeps running next to it). The layout adapts to the window size: from about 100x30 the frequency is shown in a large font, down to 80x24 in a compact layout. The scanning screen shows the range, the position in it, the mini-spectrum of the current window and the statistics; the lock screen shows the frequency, the name, the SNR bar with the thresholds and the measurements; below is the detection history.
 
-```
-rfscan --scan-range 144M-146M                          # this computer only: http://127.0.0.1:7373/
-rfscan --scan-range 144M-146M --web-gui 0.0.0.0:7373   # the home network
-rfscan --scan-range 144M-146M --web-gui off            # no web page
-```
-
-When the port is taken (e.g. by another rfscan), rfscan stops with an error; choose another port or `--web-gui off`.
-
-rfscan prints the link at startup. The page shows the frequency or channel number with its name, the state, the signal level, and has buttons for pause, skip, exclude (with a note, for good or for 10 / 30 / 60 minutes), undo, squelch, noise reduction and audio; the history and the activity log (tapping an entry names the channel, sets the `digi` mode, switches its audio recording or excludes it; an activity entry can also be deleted, and the activity log is sorted by tapping a column header) the exclusions (tapping one edits its note, keeps a timed one for good or deletes it; a timed one shows the minutes left) and, with `--record-dir`, the recordings (play or delete) are separate tabs. It has a dark and a light theme. It works with the console mode and with `--tui`, and several browsers can be connected at once, each with full control.
-
-The audio is sent to the browser as 8 kHz μ-law (64 kbit/s, 300-3000 Hz) after **Audio** is tapped (browsers need a tap before playing sound); the delay is about 0.2-0.3 s more than the local audio. The local audio keeps playing: **Mute PC** mutes it (like `m` in the TUI), and `--local-audio off` turns the local output off completely (the web page still gets the audio). With `--local-audio off` the page is the only audio, so it turns its audio on by itself; when the browser still waits for a tap, the button shows **Tap to start audio** and the first tap anywhere on the page starts the sound. An ordinary browser tab usually needs this tap, because browsers block sound until a page has been touched. A page installed as an app (PWA) started without a tap in Chrome on a phone and on a PC.
-
-**Minimized or locked.** The audio has two modes, chosen with the **Background** button. Every time the page opens, Background is off. By default **Audio** has the lowest delay and keeps playing with the page minimized on a PC, but a locked phone stops it. With **Background** on, the audio comes as an HTTP stream at `/stream.wav` (uncompressed, 128 kbit/s instead of 64 kbit/s, with the same token), also while the page is open: Chrome on Android keeps playing with the screen locked, also over plain HTTP. It starts after about 4 s of silence and stays about 3 s behind. The browser shows its own media controls with the rfscan icon: pause stops the sound of this browser, and play restarts the stream, again after about 4 s. The scanner keeps scanning and other browsers are not affected. After a pause the **Audio** button shows **Audio paused**, and tapping it also restarts the sound. Firefox on Android loses the connection soon after locking, so there is no sound while locked; the page reconnects by itself after unlocking. A page with the audio off is left to sleep, which saves the battery. A battery saver of the phone can still close the browser.
-
-**Security.** The web GUI is meant for a home network or a VPN only. It uses plain HTTP (no HTTPS, no encryption) and has no advanced security: do not expose it to the internet (no port forwarding on the router). On an address other than `127.0.0.1` the page needs a token in the link (`http://IP:PORT/?t=TOKEN`): a random one created at the first start and kept in `~/.config/rfscan/web-token` (so a bookmark on the phone keeps working after a restart; delete the file for a new token), or a fixed one from `--web-token TOKEN` (e.g. in `rfscan.conf`), which takes precedence. Windows may ask to allow rfscan through the firewall the first time it listens on the network.
-
-**Home screen.** Added to the home screen of a phone, the page opens as an app without the address bar: on iOS also over plain HTTP, on Android only over HTTPS (e.g. through a reverse proxy) or on `localhost`; otherwise Android opens it as a browser tab. In Chrome on Android, with rfscan behind a reverse proxy with HTTPS, choose **Install app** (not **Create shortcut**): the installed app opens without the address bar and with the colors of the page in the system bars. The shortcut keeps the link with the token, which stays the same after restarts (`~/.config/rfscan/web-token` or `--web-token`).
-
-**Behind a reverse proxy** (e.g. nginx with HTTPS and its own login): the page uses a WebSocket at `/ws`, so the proxy must pass WebSocket connections (in nginx `proxy_http_version 1.1; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade";`), must not buffer the audio stream at `/stream.wav` (nginx follows the `X-Accel-Buffering: no` header sent by rfscan; other proxies may need buffering turned off), and the page must be served at the root of a host name (e.g. `https://rfscan.example.org/`), not under a sub-path. With the proxy on the same computer, run rfscan with `--web-gui 127.0.0.1:PORT`: no token is needed and the proxy controls the access. Never leave such a proxy without its login (e.g. HTTP basic authentication): the page controls the scanner and edits the exclusion and channel files, and behind a proxy on `127.0.0.1` no token protects it.
+| Key | Action |
+|---|---|
+| `q`, Ctrl+C | quit |
+| `p` | pause scanning |
+| space | skip the current signal once |
+| `x` / `X` | exclude the current frequency (with adjacent channels), with an optional note; `Tab` in the popup: for good or for 10 / 30 / 60 min |
+| `u` | undo the last exclusion |
+| `+` / `-` | squelch threshold |
+| `m` | mute |
+| `n`, `<` / `>` | noise reduction on/off, strength |
+| `a` | activity screen (`←` / `→` sort column, `s` reverse the order, `l` name a channel, `Tab` in the popup: `digi`, `r` record its audio on/off, `x` exclude, `d` delete the entry, `c` clear) |
+| `e` | exclusions screen (`Enter` edit the note, `d` remove, `s` keep a timed exclusion for good) |
+| `w` | recordings screen, with `--record-dir` (`Enter` a channel's files, `Enter` play / stop a file, `d` delete it, `D` delete all, `Esc` back) |
+| `Tab` | select a detection history row (arrows move, `l` name the channel, `r` record its audio on/off, `x` / `X` exclude it (with adjacent channels), `Tab` / `Esc` back) |
 
 ## IQ recording
 
@@ -377,6 +415,7 @@ squelch-snr = 12
 digi = true
 dsd-fme = 'C:\Radio\dsd-fme\dsd-fme.exe'
 dsd-fme-args = "-fa -G group.csv"
+web-gui = "0.0.0.0:7373"
 web-token = "a-long-secret"
 ```
 
