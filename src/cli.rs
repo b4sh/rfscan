@@ -317,22 +317,24 @@ pub struct Cli {
     #[arg(long, hide_short_help = true, default_value = "info", value_parser = crate::log::Level::parse, value_name = "info|debug", help_heading = H_OTHER)]
     pub log_level: crate::log::Level,
 
-    /// Without the TUI: events on the console
+    /// Terminal interface (TUI) instead of the console log
     ///
-    /// Run without the TUI: events on stdout (also automatic when the output is not a terminal)
+    /// Terminal interface (TUI) instead of the default console mode (events and the log on the
+    /// console). Needs a terminal as the output
     #[arg(long, help_heading = H_OTHER)]
-    pub headless: bool,
+    pub tui: bool,
 
-    /// Web page for a phone or a browser, e.g. 8080 or 0.0.0.0:8080
+    /// Web page for a phone or a browser: [HOST:]PORT or off, e.g. 0.0.0.0:7373
     ///
-    /// Web GUI: HTTP server [HOST:]PORT (PORT alone = 127.0.0.1), e.g. 8080 or 0.0.0.0:8080 for
-    /// the home network. No HTTPS and no advanced security: for a home network or a VPN only
-    #[arg(long, value_parser = parse_digi_addr, value_name = "[HOST:]PORT", help_heading = H_OTHER)]
-    pub web_gui: Option<std::net::SocketAddr>,
+    /// Web GUI: HTTP server [HOST:]PORT (PORT alone = 127.0.0.1), e.g. 0.0.0.0:7373 for the home
+    /// network, or off. On by default on this computer only. No HTTPS and no advanced security:
+    /// for a home network or a VPN only
+    #[arg(long, default_value = "7373", value_parser = parse_web_gui, value_name = "[HOST:]PORT|off", help_heading = H_OTHER)]
+    pub web_gui: WebGui,
 
     /// Web GUI access token (the link is http://HOST:PORT/?t=TOKEN). Required on a non-loopback
-    /// address: without this option a random token is generated at every start. Ignored without
-    /// --web-gui (so it can stay in the configuration file)
+    /// address: without this option a random token is generated once and kept in the file
+    /// web-token in the configuration directory. Ignored with --web-gui off
     #[arg(long, hide_short_help = true, value_name = "TOKEN", help_heading = H_OTHER)]
     pub web_token: Option<String>,
 
@@ -633,6 +635,19 @@ pub fn parse_digi_addr(s: &str) -> Result<std::net::SocketAddr, String> {
         .ok_or_else(|| format!("'{s}': cannot resolve the address"))
 }
 
+/// `--web-gui`: the server address, `None` with `off`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WebGui(pub Option<std::net::SocketAddr>);
+
+fn parse_web_gui(s: &str) -> Result<WebGui, String> {
+    if s.trim().eq_ignore_ascii_case("off") {
+        return Ok(WebGui(None));
+    }
+    parse_digi_addr(s)
+        .map(|a| WebGui(Some(a)))
+        .map_err(|e| e.replace("[HOST:]PORT", "[HOST:]PORT or off"))
+}
+
 /// Decoded voice address with an optional sample rate (`--digi-audio-udp`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VoiceAddr {
@@ -711,7 +726,7 @@ fn parse_duration(s: &str) -> Result<f64, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ChannelArg, Cli, Modulation, RangeArg, parse_bw, parse_channel_list, parse_hz,
+        ChannelArg, Cli, Modulation, RangeArg, WebGui, parse_bw, parse_channel_list, parse_hz,
         parse_kwargs, parse_range, parse_range_arg, parse_step, parse_voice_addr,
     };
     use clap::Parser;
@@ -741,6 +756,35 @@ mod tests {
         assert_eq!(c.dsd_fme_args, "-fn -G g.csv");
         assert_eq!(Cli::try_parse_from(["rfscan"]).unwrap().dsd_fme_args, "-fa");
     }
+
+    #[test]
+    fn console_and_web_gui_by_default() {
+        let p = |args: &[&str]| Cli::try_parse_from([&["rfscan"], args].concat());
+        let c = p(&[]).unwrap();
+        assert!(!c.tui);
+        assert_eq!(
+            c.web_gui,
+            WebGui(Some(std::net::SocketAddr::from(([127, 0, 0, 1], 7373))))
+        );
+        assert!(p(&["--tui"]).unwrap().tui);
+        assert_eq!(p(&["--web-gui", "off"]).unwrap().web_gui, WebGui(None));
+        assert_eq!(p(&["--web-gui", "OFF"]).unwrap().web_gui, WebGui(None));
+        let net = p(&["--web-gui", "0.0.0.0:7373"])
+            .unwrap()
+            .web_gui
+            .0
+            .unwrap();
+        assert!(net.ip().is_unspecified() && net.port() == 7373);
+        assert_eq!(
+            p(&["--web-gui", "9000"]).unwrap().web_gui.0.unwrap().port(),
+            9000
+        );
+        let e = p(&["--web-gui", "nope"]).unwrap_err().to_string();
+        assert!(e.contains("[HOST:]PORT or off"), "{e}");
+        // Removed: the console mode is the default.
+        assert!(p(&["--headless"]).is_err());
+    }
+
     #[test]
     fn range_args() {
         assert_eq!(

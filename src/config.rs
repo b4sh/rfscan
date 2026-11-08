@@ -404,11 +404,11 @@ mod tests {
 
     #[test]
     fn command_line_wins_over_file() {
-        let file = "squelch-snr = 5\nheadless = true\ndsd-fme-args = \"-fa -1 1234\"\n\
+        let file = "squelch-snr = 5\ntui = true\nweb-gui = \"off\"\ndsd-fme-args = \"-fa -1 1234\"\n\
                     scan-range = [\"144M-146M\", \"430M-440M:25k\"]\n";
         let c = run(&[], file).unwrap();
         assert_eq!(c.squelch_snr, 5.0);
-        assert!(c.headless);
+        assert!(c.tui && c.web_gui.0.is_none());
         assert_eq!(c.dsd_fme_args, "-fa -1 1234");
         assert_eq!(c.scan_range.len(), 2);
         // The command line replaces the value, also a whole list.
@@ -445,8 +445,23 @@ mod tests {
         );
         let err = e("duration = 10\n");
         assert!(err.contains("only on the command line"), "{err}");
-        let err = e("headless = \"yes\"\n");
+        let err = e("tui = \"yes\"\n");
         assert!(err.contains("true or false"), "{err}");
+        // Removed: the console mode is the default.
+        let err = e("headless = true\n");
+        assert!(err.contains("unknown option"), "{err}");
+        // The web GUI address as a number (the port) or text.
+        assert_eq!(
+            run(&[], "web-gui = 9000\n")
+                .unwrap()
+                .web_gui
+                .0
+                .unwrap()
+                .port(),
+            9000
+        );
+        let err = e("web-gui = \"nope\"\n");
+        assert!(err.starts_with("test.conf:1: web-gui:"), "{err}");
         // A conflict inside the file.
         let err = e("digi = true\ndigi-tcp = 7355\n");
         assert!(err.starts_with("test.conf: "), "{err}");

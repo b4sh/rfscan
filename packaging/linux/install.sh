@@ -3,9 +3,12 @@
 #
 #   packaging/linux/install.sh               build as the current user, install with sudo
 #   packaging/linux/install.sh --no-build    install target/release/rfscan as it is
-#   packaging/linux/install.sh --uninstall   remove the installed files
+#   packaging/linux/install.sh --service     also install and start the systemd service
+#   packaging/linux/install.sh --uninstall   remove the installed files and the service
 #
 # Files: $PREFIX/bin/rfscan and $PREFIX/share/doc/rfscan/ (README.md, DOC.md, LICENSE).
+# --service: /etc/systemd/system/rfscan.service, running rfscan as the installing user with
+# that user's ~/.config/rfscan/rfscan.conf, started at boot; log: journalctl -u rfscan.
 # PREFIX defaults to /usr/local, e.g. PREFIX=/opt/rfscan packaging/linux/install.sh.
 # The user's files in ~/.config/rfscan are never touched.
 #
@@ -21,15 +24,18 @@ DOCDIR="$PREFIX/share/doc/rfscan"
 APT="sudo apt install build-essential pkg-config clang libclang-dev git libsoapysdr-dev soapysdr-module-rtlsdr soapysdr-module-airspy libasound2-dev"
 
 usage() {
-    sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 build=1
 uninstall=0
+service=0
+UNIT=/etc/systemd/system/rfscan.service
 for arg in "$@"; do
     case "$arg" in
         --no-build) build=0 ;;
         --uninstall) uninstall=1 ;;
+        --service) service=1 ;;
         -h | --help) usage; exit 0 ;;
         *) echo "unknown option: $arg" >&2; usage >&2; exit 2 ;;
     esac
@@ -46,11 +52,47 @@ run() {
     fi
 }
 
+# sudo unless already root (the service files are always in /etc).
+asroot() {
+    if [ "$(id -u)" -eq 0 ]; then
+        "$@"
+    else
+        sudo "$@"
+    fi
+}
+
 if [ "$uninstall" -eq 1 ]; then
+    if [ -e "$UNIT" ]; then
+        asroot systemctl disable --now rfscan.service || true
+        asroot rm -f "$UNIT"
+        asroot systemctl daemon-reload
+        echo "removed the service $UNIT"
+    fi
     run rm -f "$BIN"
     run rm -rf "$DOCDIR"
     echo "removed $BIN and $DOCDIR (~/.config/rfscan is kept)"
     exit 0
+fi
+
+# The service runs as the user who installs it (with sudo: the user who called sudo).
+if [ "$service" -eq 1 ]; then
+    if ! command -v systemctl >/dev/null 2>&1; then
+        echo "--service needs systemd (systemctl not found)" >&2
+        exit 1
+    fi
+    if [ "$(id -u)" -eq 0 ]; then
+        svc_user="${SUDO_USER:-}"
+        if [ -z "$svc_user" ] || [ "$svc_user" = root ]; then
+            echo "--service: run the script as the user the service should run as" >&2
+            exit 1
+        fi
+    else
+        svc_user="$(id -un)"
+    fi
+    if [ ! -f "$ROOT/packaging/linux/rfscan.service.in" ]; then
+        echo "$ROOT/packaging/linux/rfscan.service.in not found" >&2
+        exit 1
+    fi
 fi
 
 if [ "$build" -eq 1 ]; then
@@ -92,6 +134,35 @@ case ":$PATH:" in
     *":$PREFIX/bin:"*) ;;
     *) echo "note: $PREFIX/bin is not in PATH" ;;
 esac
+
+if [ "$service" -eq 1 ]; then
+    tmp="$(mktemp)"
+    sed -e "s|@USER@|$svc_user|g" -e "s|@BIN@|$BIN|g" "$ROOT/packaging/linux/rfscan.service.in" >"$tmp"
+    asroot install -Dm644 "$tmp" "$UNIT"
+    rm -f "$tmp"
+    asroot systemctl daemon-reload
+    asroot systemctl enable rfscan.service
+    asroot systemctl restart rfscan.service
+    home="$(getent passwd "$svc_user" | cut -d: -f6)"
+    conf="$home/.config/rfscan/rfscan.conf"
+    cat <<EOF
+
+installed and started the service $UNIT (user $svc_user)
+  log and the web GUI link:  journalctl -u rfscan -f
+  stop / start / restart:    sudo systemctl stop|start|restart rfscan
+  settings:                  $conf (restart the service after a change)
+EOF
+    if ! grep -qs '^[[:space:]]*web-gui[[:space:]]*=' "$conf"; then
+        cat <<EOF
+note: the web GUI listens on 127.0.0.1:7373 only (this computer). For a phone in the home
+network add to $conf:
+
+  web-gui = "0.0.0.0:7373"
+
+and run: sudo systemctl restart rfscan
+EOF
+    fi
+fi
 
 # RTL-SDR: the kernel's DVB-T driver takes the receiver when it is plugged in. Only a warning
 # with the commands; the script changes no system settings.

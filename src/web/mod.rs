@@ -94,7 +94,6 @@ pub struct WebConfig {
 /// The running server: the link to print and the thread to wait for.
 pub struct WebServer {
     pub url: String,
-    pub token_generated: bool,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -149,8 +148,14 @@ pub fn start(
     commands: Sender<Command>,
     audio: Option<rtrb::Consumer<f32>>,
 ) -> Result<WebServer, String> {
-    let listener = std::net::TcpListener::bind(cfg.addr)
-        .map_err(|e| format!("--web-gui {}: {e}", cfg.addr))?;
+    let listener = std::net::TcpListener::bind(cfg.addr).map_err(|e| {
+        let hint = if e.kind() == std::io::ErrorKind::AddrInUse {
+            " (is another rfscan running? use another port with --web-gui [HOST:]PORT, or --web-gui off)"
+        } else {
+            ""
+        };
+        format!("web GUI {}: {e}{hint}", cfg.addr)
+    })?;
     listener
         .set_nonblocking(true)
         .map_err(|e| format!("--web-gui {}: {e}", cfg.addr))?;
@@ -193,7 +198,6 @@ pub fn start(
         .map_err(|e| format!("cannot start the web GUI thread: {e}"))?;
     Ok(WebServer {
         url,
-        token_generated,
         thread: Some(thread),
     })
 }
@@ -1279,6 +1283,34 @@ pub(crate) fn mulaw(x: f32) -> u8 {
     !(sign | (exponent << 4) as u8 | mantissa as u8)
 }
 
+/// The file in the configuration directory that keeps the token for a non-loopback address.
+pub const TOKEN_FILE: &str = "web-token";
+
+/// The token kept in `dir/web-token`, and whether it was created now. A missing or empty file
+/// gets a new random token (the directory is created when needed); on Unix the file is
+/// readable by the owner only.
+pub fn stored_token(dir: &std::path::Path) -> Result<(String, bool), String> {
+    let path = dir.join(TOKEN_FILE);
+    match std::fs::read_to_string(&path) {
+        Ok(t) if !t.trim().is_empty() => return Ok((t.trim().to_string(), false)),
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("{}: {e}", path.display())),
+    }
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let token = random_token();
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+    let mut file = opts
+        .open(&path)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    std::io::Write::write_all(&mut file, format!("{token}\n").as_bytes())
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok((token, true))
+}
+
 /// A random token from the standard library's randomly seeded hasher (no extra dependency;
 /// enough for a home network).
 fn random_token() -> String {
@@ -1327,6 +1359,36 @@ fn local_ip() -> Option<std::net::IpAddr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn token_is_created_once_and_reused() {
+        let dir = std::env::temp_dir()
+            .join(format!("rfscan-token-{}", std::process::id()))
+            .join("conf");
+        let (t1, created) = stored_token(&dir).unwrap();
+        assert!(created && t1.len() == 32, "{t1}");
+        let (t2, created) = stored_token(&dir).unwrap();
+        assert_eq!((t2.as_str(), created), (t1.as_str(), false));
+        // A token edited by hand, with spaces around it, is kept.
+        std::fs::write(dir.join(TOKEN_FILE), "  my-token \n").unwrap();
+        assert_eq!(stored_token(&dir).unwrap(), ("my-token".to_string(), false));
+        // An empty file gets a new token.
+        std::fs::write(dir.join(TOKEN_FILE), "\n").unwrap();
+        let (t3, created) = stored_token(&dir).unwrap();
+        assert!(created && t3.len() == 32);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::remove_file(dir.join(TOKEN_FILE)).unwrap();
+            stored_token(&dir).unwrap();
+            let mode = std::fs::metadata(dir.join(TOKEN_FILE))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        std::fs::remove_dir_all(dir.parent().unwrap()).unwrap();
+    }
 
     /// Decodes μ-law (the page does the same in JavaScript).
     fn decode(u: u8) -> f32 {

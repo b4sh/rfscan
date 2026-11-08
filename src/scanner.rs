@@ -1,4 +1,4 @@
-//! Scanner with a state machine, headless mode, with demodulation and audio in the
+//! Scanner with a state machine, console mode, with demodulation and audio in the
 //! Locked state.
 //!
 //! ```text
@@ -408,7 +408,7 @@ pub struct Session<'a> {
     /// Digi output for DSD-FME (`--digi-tcp`).
     pub digi: Option<&'a DigiServer>,
     pub exclusions: &'a mut ExclusionCtl,
-    /// User interface (TUI), `None` in headless mode.
+    /// User interface (TUI), `None` in the console mode.
     pub ui: Option<UiLink>,
     /// Audio recording (`--record-dir`): told where each activity begins and ends.
     pub recorder: Option<&'a crate::recorder::Link>,

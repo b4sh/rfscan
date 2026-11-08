@@ -833,7 +833,7 @@ fn run_scan(cli: &Cli, src: &mut SoapySource, rate: f64, log: &mut Log) -> anyho
     } = audio::AudioOut::open(
         cli.audio_device.as_deref(),
         cli.local_audio,
-        cli.web_gui.is_some(),
+        cli.web_gui.0.is_some(),
         cli.record_dir.is_some(),
     )
     .map_err(anyhow::Error::msg)?;
@@ -1065,10 +1065,10 @@ fn run_scan(cli: &Cli, src: &mut SoapySource, rate: f64, log: &mut Log) -> anyho
         }
     );
 
-    // TUI unless --headless or the output is not a terminal; the web GUI
-    // with --web-gui. Both read the same context and send the same commands.
-    let tui = !cli.headless && std::io::stdout().is_terminal();
-    let ctx = (tui || cli.web_gui.is_some()).then(|| {
+    // The console mode with the web GUI by default; the TUI with --tui, the web GUI off with
+    // --web-gui off. Both read the same context and send the same commands.
+    let tui = cli.tui;
+    let ctx = (tui || cli.web_gui.0.is_some()).then(|| {
         let db_entries = cli
             .channels_file
             .clone()
@@ -1155,7 +1155,7 @@ fn run_scan(cli: &Cli, src: &mut SoapySource, rate: f64, log: &mut Log) -> anyho
         let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
         // With both interfaces the scanner's events are copied to each of them by a thread of
         // its own, so the scanner loop stays unchanged.
-        let (tui_rx, web_rx) = match (tui, cli.web_gui.is_some()) {
+        let (tui_rx, web_rx) = match (tui, cli.web_gui.0.is_some()) {
             (true, true) => {
                 let (tui_tx, tui_rx) = crossbeam_channel::bounded(UI_EVENT_QUEUE);
                 let (web_tx, web_rx) = crossbeam_channel::bounded(UI_EVENT_QUEUE);
@@ -1173,11 +1173,34 @@ fn run_scan(cli: &Cli, src: &mut SoapySource, rate: f64, log: &mut Log) -> anyho
             (true, false) => (Some(ev_rx), None),
             _ => (None, Some(ev_rx)),
         };
-        if let (Some(addr), Some(web_rx)) = (cli.web_gui, web_rx) {
+        if let (Some(addr), Some(web_rx)) = (cli.web_gui.0, web_rx) {
+            // A fixed token for the network: --web-token, else the one kept in the
+            // configuration directory (created at the first start).
+            let mut token = cli.web_token.clone();
+            if token.is_none() && !addr.ip().is_loopback() {
+                match paths::config_dir() {
+                    Some(dir) => {
+                        let (t, created) = web::stored_token(&dir).map_err(anyhow::Error::msg)?;
+                        if created {
+                            logln!(
+                                log,
+                                Level::Info,
+                                "web GUI: a new token saved in {} (delete the file for a new one, or set one with --web-token)",
+                                dir.join(web::TOKEN_FILE).display()
+                            );
+                        }
+                        token = Some(t);
+                    }
+                    None => logwarn!(
+                        log,
+                        "WARNING: web GUI: no configuration directory, the token is random for this run (set a fixed one with --web-token)"
+                    ),
+                }
+            }
             let server = web::start(
                 web::WebConfig {
                     addr,
-                    token: cli.web_token.clone(),
+                    token,
                     local_audio: cli.local_audio,
                     audio_rate: out.rate,
                     exclude_wide: cli.exclude_wide,
@@ -1189,13 +1212,6 @@ fn run_scan(cli: &Cli, src: &mut SoapySource, rate: f64, log: &mut Log) -> anyho
             )
             .map_err(anyhow::Error::msg)?;
             logln!(log, Level::Info, "web GUI: {}", server.url);
-            if server.token_generated {
-                logln!(
-                    log,
-                    Level::Info,
-                    "web GUI: a random token for this run (set a fixed one with --web-token)"
-                );
-            }
             if !addr.ip().is_loopback() {
                 logwarn!(
                     log,
@@ -1544,6 +1560,12 @@ Audio outputs (--audio-device):"
             dir.display()
         );
     }
+    // --tui is used only by the scan; checked before the device is opened.
+    let one_time = cli.bench || cli.calibrate || cli.power.is_some() || cli.record_iq.is_some();
+    if cli.tui && !one_time && !std::io::stdout().is_terminal() {
+        bail!("--tui needs a terminal as the output (without --tui the log goes to the console)");
+    }
+    // Ctrl+C, and SIGTERM on Linux (systemctl stop): the same clean exit.
     ctrlc::set_handler(|| STOP.store(true, Ordering::Relaxed))
         .context("cannot set the Ctrl+C handler")?;
 
@@ -1729,6 +1751,42 @@ mod tests {
         assert_eq!(receiver_hint(&e), Some(NO_SAMPLES_HINT));
         let e = anyhow::Error::from(device::SdrError::Unsupported("x".into()));
         assert_eq!(receiver_hint(&e), None);
+    }
+
+    /// The systemd unit installed by `install.sh --service`: rfscan without options as the
+    /// installing user, at boot, restarted on failure.
+    #[test]
+    fn service_unit_template() {
+        let unit = include_str!("../packaging/linux/rfscan.service.in");
+        let lines: Vec<&str> = unit.lines().map(str::trim).collect();
+        for want in [
+            "[Service]",
+            "User=@USER@",
+            "ExecStart=@BIN@",
+            "Restart=on-failure",
+            "NoNewPrivileges=yes",
+            "ProtectSystem=full",
+            "PrivateTmp=yes",
+            "WantedBy=multi-user.target",
+        ] {
+            assert!(lines.contains(&want), "{want}");
+        }
+        assert!(!unit.contains('\r'), "LF line endings");
+        let script = include_str!("../packaging/linux/install.sh");
+        assert!(!script.contains('\r'), "LF line endings");
+        assert!(script.contains("s|@USER@|$svc_user|g") && script.contains("s|@BIN@|$BIN|g"));
+        // The shell syntax, where a POSIX shell is available.
+        if let Ok(out) = std::process::Command::new("sh")
+            .args(["-n", "packaging/linux/install.sh"])
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .output()
+        {
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
     }
 
     /// Range bw: range bw=, then --bw, then the step (AM included).

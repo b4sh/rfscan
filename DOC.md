@@ -41,7 +41,7 @@ cd rfscan
 packaging/linux/install.sh
 ```
 
-The script checks the build dependencies (when one is missing it prints the `apt` command and stops; it installs no system packages itself), builds rfscan with `cargo build --release` and asks for `sudo` only to copy the program to `/usr/local/bin/rfscan` and the documentation to `/usr/local/share/doc/rfscan`. Another location: `PREFIX=/opt/rfscan packaging/linux/install.sh`. `--no-build` installs an already built `target/release/rfscan`, `--uninstall` removes the installed files (your files in `~/.config/rfscan` stay). To update: `git pull` and run the script again. Without installing, the program is `target/release/rfscan` after `cargo build --release`. The build takes about 7 minutes on a Raspberry Pi 4. The Airspy and RTL-SDR packages set up the USB access by themselves (udev rules), so the receivers work without root. An RTL-SDR is also taken by the kernel's DVB-T driver; librtlsdr detaches it when rfscan opens the receiver and attaches it again on exit, but after a few runs the stream may stop (`the stream delivers no samples`). Block the DVB-T driver once (the Debian packages do not do it, and `install.sh` prints these commands when it is not blocked): unplug the receiver, run
+The script checks the build dependencies (when one is missing it prints the `apt` command and stops; it installs no system packages itself), builds rfscan with `cargo build --release` and asks for `sudo` only to copy the program to `/usr/local/bin/rfscan` and the documentation to `/usr/local/share/doc/rfscan`. Another location: `PREFIX=/opt/rfscan packaging/linux/install.sh`. `--no-build` installs an already built `target/release/rfscan`, `--uninstall` removes the installed files and the service (your files in `~/.config/rfscan` stay). To update: `git pull` and run the script again. Without installing, the program is `target/release/rfscan` after `cargo build --release`. The build takes about 7 minutes on a Raspberry Pi 4. The Airspy and RTL-SDR packages set up the USB access by themselves (udev rules), so the receivers work without root. An RTL-SDR is also taken by the kernel's DVB-T driver; librtlsdr detaches it when rfscan opens the receiver and attaches it again on exit, but after a few runs the stream may stop (`the stream delivers no samples`). Block the DVB-T driver once (the Debian packages do not do it, and `install.sh` prints these commands when it is not blocked): unplug the receiver, run
 
 ```
 printf 'blacklist dvb_usb_rtl28xxu\nblacklist rtl2832_sdr\nblacklist rtl2832\n' | sudo tee /etc/modprobe.d/blacklist-rtlsdr.conf
@@ -62,6 +62,24 @@ It is installed to `/usr/local/lib/SoapySDR/modules0.8`, where SoapySDR finds it
 On Linux `--list-devices` lists every ALSA device of a sound card (`hw:`, `plughw:`, `dmix:` ...), with its ALSA name in brackets, e.g. `--audio-device "plughw:CARD=Headphones"`. A Raspberry Pi without speakers runs with `--local-audio off` and plays the audio in the [web GUI](#web-gui).
 
 `rfscan --list-devices` shows the receivers SoapySDR sees, with their frequency ranges, sample rates, gain stages, sample format, driver settings and stream arguments, plus the SoapySDR version and module diagnostics (useful when no receiver is found). Sound cards (SoapySDR `driver=audio`) are listed but never used as receivers. `--device` chooses a receiver in Soapy syntax, e.g. `--device driver=rtlsdr` or `--device driver=airspy,serial=...`; without it rfscan takes the first free one.
+
+**As a service (Linux, Raspberry Pi).** `packaging/linux/install.sh --service` also installs a systemd service, `/etc/systemd/system/rfscan.service`, and starts it: rfscan runs as the user who ran the script, starts at boot, is started again after an error (e.g. a receiver not plugged in yet) and needs no `screen` or open SSH session. It is started without options, so every setting comes from that user's `~/.config/rfscan/rfscan.conf`, e.g.
+
+```
+scan-range = ["144M-146M", "430M-440M:12.5k"]
+gain = "agc=true"
+web-gui = "0.0.0.0:7373"     # the web page for a phone in the home network
+local-audio = "off"          # no sound card
+```
+
+```
+journalctl -u rfscan -f              # the log, with the web GUI link at the start
+sudo systemctl restart rfscan        # after changing rfscan.conf
+sudo systemctl stop rfscan           # stops cleanly: the activity log is saved, the receiver released
+sudo systemctl disable --now rfscan  # stop it and do not start it at boot
+```
+
+`install.sh --uninstall` removes the service together with the program.
 
 ## Receiver setup
 
@@ -270,7 +288,7 @@ records the audio of the channels marked `rec` in the [channel file](#channel-fi
 
 ## TUI
 
-When the output is a terminal, rfscan runs with the TUI. The layout adapts to the window size: from about 100x30 the frequency is shown in a large font, down to 80x24 in a compact layout. The scanning screen shows the range, the position in it, the mini-spectrum of the current window and the statistics; the lock screen shows the frequency, the name, the SNR bar with the thresholds and the measurements; below is the detection history.
+`--tui` starts the text interface instead of the console mode (it needs a terminal as the output; the web GUI keeps running next to it). The layout adapts to the window size: from about 100x30 the frequency is shown in a large font, down to 80x24 in a compact layout. The scanning screen shows the range, the position in it, the mini-spectrum of the current window and the statistics; the lock screen shows the frequency, the name, the SNR bar with the thresholds and the measurements; below is the detection history.
 
 | Key | Action |
 |---|---|
@@ -289,7 +307,7 @@ When the output is a terminal, rfscan runs with the TUI. The layout adapts to th
 
 ## Console mode and log file
 
-With `--headless` (or when the output is redirected to a file) rfscan writes events to the console instead of the TUI: each event line starts with the local time, e.g.
+By default rfscan writes events and the log to the console (without `--tui`; the web GUI runs next to it): each event line starts with the local time, e.g.
 
 ```
 15:38:12  LOCKED    145.500 MHz  NFM   RSSI  -61.2 dBFS  noise  -88.0 dBFS  SNR  26.8 dB  (window B1)  "CALLING"
@@ -304,22 +322,25 @@ With `--headless` (or when the output is redirected to a file) rfscan writes eve
 
 ## Web GUI
 
-`--web-gui [HOST:]PORT` starts a web page for watching, hearing and controlling the scanner from a phone or a desktop browser, e.g. for a receiver without a monitor near the antenna:
+rfscan always starts a web page for watching, hearing and controlling the scanner from a phone or a desktop browser, e.g. for a receiver without a monitor near the antenna. By default it listens on this computer only, `http://127.0.0.1:7373/`; `--web-gui [HOST:]PORT` changes the address and `--web-gui off` turns it off:
 
 ```
-rfscan --scan-range 144M-146M --web-gui 8080            # this computer only: http://127.0.0.1:8080/
-rfscan --scan-range 144M-146M --web-gui 0.0.0.0:8080    # the home network
+rfscan --scan-range 144M-146M                          # this computer only: http://127.0.0.1:7373/
+rfscan --scan-range 144M-146M --web-gui 0.0.0.0:7373   # the home network
+rfscan --scan-range 144M-146M --web-gui off            # no web page
 ```
 
-rfscan prints the link at startup. The page shows the frequency or channel number with its name, the state, the signal level, and has buttons for pause, skip, exclude (with a note, for good or for 10 / 30 / 60 minutes), undo, squelch, noise reduction and audio; the history and the activity log (tapping an entry names the channel, sets the `digi` mode, switches its audio recording or excludes it; an activity entry can also be deleted, and the activity log is sorted by tapping a column header) the exclusions (tapping one edits its note, keeps a timed one for good or deletes it; a timed one shows the minutes left) and, with `--record-dir`, the recordings (play or delete) are separate tabs. It has a dark and a light theme. It works with the TUI or with `--headless`, and several browsers can be connected at once, each with full control.
+When the port is taken (e.g. by another rfscan), rfscan stops with an error; choose another port or `--web-gui off`.
+
+rfscan prints the link at startup. The page shows the frequency or channel number with its name, the state, the signal level, and has buttons for pause, skip, exclude (with a note, for good or for 10 / 30 / 60 minutes), undo, squelch, noise reduction and audio; the history and the activity log (tapping an entry names the channel, sets the `digi` mode, switches its audio recording or excludes it; an activity entry can also be deleted, and the activity log is sorted by tapping a column header) the exclusions (tapping one edits its note, keeps a timed one for good or deletes it; a timed one shows the minutes left) and, with `--record-dir`, the recordings (play or delete) are separate tabs. It has a dark and a light theme. It works with the console mode and with `--tui`, and several browsers can be connected at once, each with full control.
 
 The audio is sent to the browser as 8 kHz μ-law (64 kbit/s, 300-3000 Hz) after **Audio** is tapped (browsers need a tap before playing sound); the delay is about 0.2-0.3 s more than the local audio. The local audio keeps playing: **Mute PC** mutes it (like `m` in the TUI), and `--local-audio off` turns the local output off completely (the web page still gets the audio). With `--local-audio off` the page is the only audio, so it turns its audio on by itself; when the browser still waits for a tap, the button shows **Tap to start audio** and the first tap anywhere on the page starts the sound. An ordinary browser tab usually needs this tap, because browsers block sound until a page has been touched. A page installed as an app (PWA) started without a tap in Chrome on a phone and on a PC.
 
 **Minimized or locked.** The audio has two modes, chosen with the **Background** button. Every time the page opens, Background is off. By default **Audio** has the lowest delay and keeps playing with the page minimized on a PC, but a locked phone stops it. With **Background** on, the audio comes as an HTTP stream at `/stream.wav` (uncompressed, 128 kbit/s instead of 64 kbit/s, with the same token), also while the page is open: Chrome on Android keeps playing with the screen locked, also over plain HTTP. It starts after about 4 s of silence and stays about 3 s behind. The browser shows its own media controls with the rfscan icon: pause stops the sound of this browser, and play restarts the stream, again after about 4 s. The scanner keeps scanning and other browsers are not affected. After a pause the **Audio** button shows **Audio paused**, and tapping it also restarts the sound. Firefox on Android loses the connection soon after locking, so there is no sound while locked; the page reconnects by itself after unlocking. A page with the audio off is left to sleep, which saves the battery. A battery saver of the phone can still close the browser.
 
-**Security.** The web GUI is meant for a home network or a VPN only. It uses plain HTTP (no HTTPS, no encryption) and has no advanced security: do not expose it to the internet (no port forwarding on the router). On an address other than `127.0.0.1` the page needs a token in the link (`http://IP:PORT/?t=TOKEN`): a random one at every start, or a fixed one from `--web-token TOKEN` (e.g. in `rfscan.conf`, so a bookmark on the phone keeps working). Windows may ask to allow rfscan through the firewall the first time it listens on the network.
+**Security.** The web GUI is meant for a home network or a VPN only. It uses plain HTTP (no HTTPS, no encryption) and has no advanced security: do not expose it to the internet (no port forwarding on the router). On an address other than `127.0.0.1` the page needs a token in the link (`http://IP:PORT/?t=TOKEN`): a random one created at the first start and kept in `~/.config/rfscan/web-token` (so a bookmark on the phone keeps working after a restart; delete the file for a new token), or a fixed one from `--web-token TOKEN` (e.g. in `rfscan.conf`), which takes precedence. Windows may ask to allow rfscan through the firewall the first time it listens on the network.
 
-**Home screen.** Added to the home screen of a phone, the page opens as an app without the address bar: on iOS also over plain HTTP, on Android only over HTTPS (e.g. through a reverse proxy) or on `localhost`; otherwise Android opens it as a browser tab. In Chrome on Android, with rfscan behind a reverse proxy with HTTPS, choose **Install app** (not **Create shortcut**): the installed app opens without the address bar and with the colors of the page in the system bars. The shortcut keeps the link with the token, so use a fixed `--web-token`.
+**Home screen.** Added to the home screen of a phone, the page opens as an app without the address bar: on iOS also over plain HTTP, on Android only over HTTPS (e.g. through a reverse proxy) or on `localhost`; otherwise Android opens it as a browser tab. In Chrome on Android, with rfscan behind a reverse proxy with HTTPS, choose **Install app** (not **Create shortcut**): the installed app opens without the address bar and with the colors of the page in the system bars. The shortcut keeps the link with the token, which stays the same after restarts (`~/.config/rfscan/web-token` or `--web-token`).
 
 **Behind a reverse proxy** (e.g. nginx with HTTPS and its own login): the page uses a WebSocket at `/ws`, so the proxy must pass WebSocket connections (in nginx `proxy_http_version 1.1; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade";`), must not buffer the audio stream at `/stream.wav` (nginx follows the `X-Accel-Buffering: no` header sent by rfscan; other proxies may need buffering turned off), and the page must be served at the root of a host name (e.g. `https://rfscan.example.org/`), not under a sub-path. With the proxy on the same computer, run rfscan with `--web-gui 127.0.0.1:PORT`: no token is needed and the proxy controls the access. Never leave such a proxy without its login (e.g. HTTP basic authentication): the page controls the scanner and edits the exclusion and channel files, and behind a proxy on `127.0.0.1` no token protects it.
 
@@ -360,4 +381,5 @@ rfscan keeps its files in `~/.config/rfscan` (on Windows `C:\Users\USER\.config\
 | `rfscan-exclude.txt` | excluded frequencies with notes | `--exclude-file` |
 | `rfscan-activity.txt` | activity log (`rfscan --report`) | `--activity-file` |
 | `rfscan.conf` | options used at every start | `--config` |
+| `web-token` | the web GUI token for a network address (created at the first start) | `--web-token` |
 | `dsd-fme.log`, `dsd-fme-events.log` | DSD-FME console and call log (with `--digi`) | `--dsd-fme-logs` |

@@ -1,0 +1,27 @@
+# rfscan as a service, installed by packaging/linux/install.sh --service.
+# @USER@ and @BIN@ are filled in by the script. All settings come from that user's
+# ~/.config/rfscan/rfscan.conf (e.g. web-gui = "0.0.0.0:7373", local-audio = "off").
+# Log: journalctl -u rfscan -f
+
+[Unit]
+Description=rfscan radio scanner
+Documentation=https://github.com/b4sh/rfscan
+Wants=network-online.target
+After=network-online.target sound.target
+
+[Service]
+Type=simple
+User=@USER@
+ExecStart=@BIN@
+# A receiver not plugged in yet is tried again.
+Restart=on-failure
+RestartSec=10
+# Ctrl+C and SIGTERM end rfscan cleanly (the activity log is saved).
+TimeoutStopSec=15
+# Hardening that keeps the home directory writable (configuration, recordings, --log).
+NoNewPrivileges=yes
+ProtectSystem=full
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

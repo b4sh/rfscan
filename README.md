@@ -26,7 +26,7 @@ It works with any receiver supported by [SoapySDR](https://github.com/pothosware
 - **Detection by signal-to-noise ratio.** The noise floor is measured in every window, and a channel that rises a set number of dB above it (`--squelch-snr`) stops the scanner. A hit is first confirmed at a different tuner frequency, so receiver artifacts (images, spurs) do not stop it, and the DC spike in the middle of the band never falls on a channel.
 - **Listening.** On a stop the channel is mixed down digitally and demodulated; the audio goes through a 300-3000 Hz filter, an AGC (stations sound equally loud), speech noise reduction (RNNoise) and a limiter. After the signal disappears the scanner waits a moment (`--pause`) and goes on.
 - **Knowledge of your band.** A channel file gives names and modes to frequencies, an exclusion list skips interference and unwanted channels (one key in the TUI), an activity log counts how long each frequency was active, and the audio of chosen channels can be recorded to WAV files (`--record-dir`).
-- **Three ways to use it.** A text interface (TUI), a plain console mode for logs and scripts (`--headless`), and a web GUI for a phone or a browser (`--web-gui`).
+- **Three ways to use it.** By default a console log with a web GUI for a phone or a browser (`http://127.0.0.1:7373/`, `--web-gui`), a text interface on request (`--tui`), and on Linux a systemd service for a receiver without a monitor (`install.sh --service`).
 
 ![rfscan scanning the 2 m band in the TUI](docs/screenshot-tui.png)
 
@@ -69,9 +69,10 @@ Tested on Windows 11 and on a Raspberry Pi 4 (4 GB, Debian 13 64-bit). On the Ra
    rfscan --scan-range 118M-137M:am              # airband, AM, 8.33 kHz channels
    rfscan --scan-range 144M-146M --scan-range 430M-440M:12.5k
    rfscan --scan-channels 145.5M,118.1M:am       # single channels
-   rfscan --web-gui 0.0.0.0:8080                 # plus a web page for a phone in the home network
+   rfscan --web-gui 0.0.0.0:7373                 # the web page also for a phone in the home network
+   rfscan --tui                                  # the text interface instead of the console log
    ```
-   In the TUI: `q` quit, `space` skip, `x` exclude the frequency, `p` pause, `a` activity, `+`/`-` squelch.
+   The web page is at `http://127.0.0.1:7373/` (the link is printed at startup). In the TUI: `q` quit, `space` skip, `x` exclude the frequency, `p` pause, `a` activity, `+`/`-` squelch.
 
 `rfscan -h` lists the most used options, `rfscan --help` all of them. The full description is in [DOC.md](DOC.md).
 
