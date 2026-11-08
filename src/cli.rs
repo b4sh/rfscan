@@ -79,8 +79,8 @@ pub struct Cli {
     #[arg(long, value_name = "HZ", hide_short_help = true, value_parser = parse_step, help_heading = H_RADIO)]
     pub step: Option<u64>,
 
-    /// Default channel bandwidth (Hz, suffixes k, M; 2.5k-50k). Default: AM 8.33 kHz, NFM in
-    /// ranges equal to the step, NFM in a channel list 12.5 kHz
+    /// Default channel bandwidth (Hz, suffixes k, M; 2.5k-50k). Default: in ranges equal to the
+    /// step, in a channel list AM 8.33 kHz, NFM and digi 12.5 kHz
     #[arg(long, value_name = "HZ", hide_short_help = true, value_parser = parse_bw, help_heading = H_RADIO)]
     pub bw: Option<u64>,
 

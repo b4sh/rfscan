@@ -143,15 +143,6 @@ fn default_channel_bw(mode: plan::Modulation) -> f64 {
     }
 }
 
-/// Default range channel width: NFM = step, AM 8.33 kHz, digi 12.5 kHz.
-fn default_range_bw(mode: plan::Modulation, step_hz: f64) -> f64 {
-    match mode {
-        plan::Modulation::Nfm => step_hz,
-        plan::Modulation::Am => AM_DEFAULT_BW_HZ,
-        plan::Modulation::Digi => 12_500.0,
-    }
-}
-
 /// Channel file, always loaded. Without a configuration directory and without
 /// `--channels-file` the database is empty, unless the file is the only source of channels
 /// (`required`).
@@ -209,6 +200,11 @@ fn check_explicit_digi(cli: &Cli) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Range channel width: from the range, then `--bw`, then equal to the step (every mode).
+fn range_bw(range: Option<u64>, cli: Option<u64>, step_hz: f64) -> f64 {
+    range.or(cli).map_or(step_hz, |b| b as f64)
+}
+
 /// Names, modes and `bw=` from the channel file for range channels: matching within
 /// half a step, the file mode takes precedence over the range suffix, the file `bw=` changes
 /// only the demodulator filter and only when the range has no `bw=` of its own. The detector
@@ -217,7 +213,6 @@ fn check_explicit_digi(cli: &Cli) -> anyhow::Result<()> {
 fn apply_channel_db(
     plan: &mut plan::ScanPlan,
     entries: &[channel_db::ChannelEntry],
-    cli_bw: Option<u64>,
 ) -> Vec<String> {
     let mut warnings = Vec::new();
     for ch in &mut plan.channels {
@@ -239,16 +234,13 @@ fn apply_channel_db(
         }
         ch.name = e.name.clone();
         ch.raster25 = e.raster25;
-        let range_mode = ch.mode;
         if let Some(m) = e.mode {
             ch.mode = m;
         }
-        if !ch.bw_explicit {
-            if let Some(b) = e.bw {
-                ch.demod_bw = b as f64;
-            } else if ch.mode != range_mode && cli_bw.is_none() {
-                ch.demod_bw = default_range_bw(ch.mode, ch.spacing);
-            }
+        // Without a file bw= the demodulator keeps the range bw (by default the step, in
+        // every mode).
+        if let (false, Some(b)) = (ch.bw_explicit, e.bw) {
+            ch.demod_bw = b as f64;
         }
     }
     warnings
@@ -395,9 +387,7 @@ fn prepare_plan(
                 plan::Modulation::Nfm | plan::Modulation::Digi => NFM_DEFAULT_STEP_HZ,
                 plan::Modulation::Am => AM_DEFAULT_STEP_HZ,
             }));
-            let bw =
-                a.bw.or(cli.bw)
-                    .map_or(default_range_bw(mode, step.hz()), |b| b as f64);
+            let bw = range_bw(a.bw, cli.bw, step.hz());
             let what = format!("range {}-{} MHz", a.start as f64 / 1e6, a.stop as f64 / 1e6);
             check_bw(log, &what, bw, width)?;
             if bw < step.hz() - 0.5 {
@@ -446,7 +436,7 @@ fn prepare_plan(
         let mut plan =
             plan::ranges_plan(&ranges, width, cli.dc_guard).map_err(anyhow::Error::msg)?;
         let entries = load_channel_db(log, cli, false)?;
-        for w in apply_channel_db(&mut plan, &entries, cli.bw) {
+        for w in apply_channel_db(&mut plan, &entries) {
             logwarn!(log, "{w}");
         }
         plan
@@ -1741,6 +1731,15 @@ mod tests {
         assert_eq!(receiver_hint(&e), None);
     }
 
+    /// Range bw: range bw=, then --bw, then the step (AM included).
+    #[test]
+    fn range_bw_defaults_to_step() {
+        assert_eq!(range_bw(None, None, 12_500.0), 12_500.0);
+        assert_eq!(range_bw(None, None, 25_000.0 / 3.0), 25_000.0 / 3.0);
+        assert_eq!(range_bw(None, Some(10_000), 12_500.0), 10_000.0);
+        assert_eq!(range_bw(Some(25_000), Some(10_000), 12_500.0), 25_000.0);
+    }
+
     /// Channel file in a range: name and mode from the file, bw= from the file only for the
     /// demodulator and only without an explicit range bw=; the detector keeps the range bw.
     #[test]
@@ -1763,7 +1762,7 @@ mod tests {
 
         let mut p = plan::ranges_plan(&[range(false)], 4_800_000, 1).unwrap();
         // Only the entry off the grid gets a warning.
-        let warnings = apply_channel_db(&mut p, &entries, None);
+        let warnings = apply_channel_db(&mut p, &entries);
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(
             warnings[0].contains("438.802000 MHz \"K438802000\" is +2.0 kHz off the range grid")
@@ -1777,7 +1776,7 @@ mod tests {
         let am = find(&p, 438_500_000).unwrap();
         assert_eq!(
             (am.mode, am.demod_bw, am.bw),
-            (Modulation::Am, AM_DEFAULT_BW_HZ, 12_500.0)
+            (Modulation::Am, 12_500.0, 12_500.0)
         );
         let narrow = find(&p, 438_250_000).unwrap();
         assert_eq!((narrow.mode, narrow.demod_bw), (Modulation::Nfm, 10_000.0));
@@ -1789,7 +1788,7 @@ mod tests {
 
         // An explicit range bw= wins over the file bw=, the file mode still applies.
         let mut p = plan::ranges_plan(&[range(true)], 4_800_000, 1).unwrap();
-        apply_channel_db(&mut p, &entries, None);
+        apply_channel_db(&mut p, &entries);
         assert_eq!(find(&p, 438_250_000).unwrap().demod_bw, 12_500.0);
         assert_eq!(find(&p, 438_500_000).unwrap().mode, Modulation::Am);
     }
