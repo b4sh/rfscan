@@ -195,6 +195,7 @@ body:not([data-tab="main"]) #main { display: none; }
 .squelch { grid-column: 1 / -1; display: grid; grid-template-columns: 56px 1fr 56px; align-items: center; gap: 8px; }
 .squelch .val { text-align: center; }
 .squelch .val b { font-size: 21px; }
+.squelch .val div { white-space: nowrap; }
 .squelch .val div, .nrval div { font-size: 11px; color: var(--dim); font-weight: 400; }
 .nrval { flex-direction: column; gap: 0; min-width: 0; }
 .nrval div { max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -400,7 +401,7 @@ body.nolocal #bMute { display: none; }
         <button class="btn" id="bUndo">↶ Undo</button>
         <div class="squelch">
           <button class="btn" id="bSqDown">−</button>
-          <div class="val"><b id="sqVal">-</b><div>squelch (SNR)</div><div>exit: <span id="sqExit">-</span> dB</div></div>
+          <div class="val"><b id="sqVal">-</b><div>squelch (SNR) exit: <span id="sqExit">-</span> dB</div></div>
           <button class="btn" id="bSqUp">+</button>
         </div>
         <div class="squelch">
