@@ -43,6 +43,11 @@ pub fn format_mhz(hz: u64) -> String {
     s
 }
 
+/// The window LO in MHz for the display, three decimal places.
+pub fn format_lo_mhz(hz: u64) -> String {
+    format!("{:.3}", hz as f64 / 1e6)
+}
+
 /// Local time in ISO 8601 format (without time zone), e.g. 2026-10-13T14:02:11.
 pub fn local_now() -> String {
     chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string()

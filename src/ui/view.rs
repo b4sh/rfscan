@@ -11,7 +11,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use super::{App, Screen, bigtext};
-use crate::activity::format_mhz;
+use crate::activity::{format_lo_mhz, format_mhz};
 use crate::dsd_fme::DsdState;
 use crate::events::{LockView, ScanState, Spectrum};
 use crate::exclusions::TIMED_MINUTES;
@@ -1204,7 +1204,7 @@ fn spectrum_lines(app: &App, sp: &Spectrum, width: usize) -> Vec<Line<'static>> 
         format_mhz(sp.first_hz),
         format_mhz(sp.last_hz)
     );
-    let now = format!("now: {} MHz   ", format_mhz(sp.lo_hz));
+    let now = format!("now: {} MHz   ", format_lo_mhz(sp.lo_hz));
     let pad = width.saturating_sub(head.chars().count() + now.chars().count());
     const LEVELS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
     let mut bars = vec![text("   ")];

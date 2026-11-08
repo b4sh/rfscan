@@ -931,7 +931,7 @@ fn spectrum_json(ctx: &UiContext, s: &Spectrum) -> Value {
         "ex": ex,
         "first": ctx.freq_label(s.first_hz),
         "last": ctx.freq_label(s.last_hz),
-        "lo": crate::activity::format_mhz(s.lo_hz),
+        "lo": crate::activity::format_lo_mhz(s.lo_hz),
         "strongest": s.strongest.map(|(f, snr)| json!({
             "label": ctx.freq_label(f),
             "snr": round1(snr),
@@ -1466,6 +1466,14 @@ mod tests {
         // The tone goes on from the start: 15 s are whole periods, so the frame begins at zero.
         assert_eq!(pcm[..2], 0i16.to_le_bytes());
         assert!(start.len() > 44);
+    }
+
+    #[test]
+    fn lo_label_has_three_decimals() {
+        use crate::activity::format_lo_mhz;
+        assert_eq!(format_lo_mhz(433_606_250), "433.606");
+        assert_eq!(format_lo_mhz(145_250_000), "145.250");
+        assert_eq!(format_lo_mhz(118_008_334), "118.008");
     }
 
     #[test]
