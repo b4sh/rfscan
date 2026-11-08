@@ -483,13 +483,13 @@ footer a:hover { color: var(--text); }
           <div>
             <div class="k">02</div>
             <h3>Install <strong>rfscan</strong> and start it</h3>
-            <p>Build it on the Pi with the install script, then run it in console mode, with no local audio and with the web GUI on the home network.</p>
-            <p>A fixed <code>--web-token</code> keeps the link the same, so a bookmark keeps working.</p>
+            <p>Build it on the Pi with the install script, then run it with no local audio and with the web GUI on the home network.</p>
+            <p><strong>rfscan</strong> prints the link with its access token. The token is generated once and kept, so a bookmark keeps working.</p>
           </div>
           <div class="art" aria-hidden="true">
             <div class="term">
               <div class="tb"><i></i><i></i><i></i><span>pi@raspberrypi: ~</span></div>
-              <div class="tl"><span class="ln" style="--i:0"><span class="p">$ </span>packaging/linux/install.sh</span><span class="ln" style="--i:1"><span class="c"># builds and installs rfscan</span></span><span class="ln" style="--i:2"><span class="p">$ </span>rfscan --scan-range 144M-146M \</span><span class="ln" style="--i:3">    --headless --local-audio off \</span><span class="ln" style="--i:4">    --web-gui 0.0.0.0:8080 \</span><span class="ln" style="--i:5">    --web-token s3cret</span><span class="ln" style="--i:6"><span class="o">web GUI: http://10.0.0.5:8080/?t=s3cret</span></span><span class="ln" style="--i:7"><span class="cur"></span></span></div>
+              <div class="tl"><span class="ln" style="--i:0"><span class="p">$ </span>packaging/linux/install.sh</span><span class="ln" style="--i:1"><span class="c"># builds and installs rfscan</span></span><span class="ln" style="--i:2"><span class="p">$ </span>rfscan --scan-range 144M-146M \</span><span class="ln" style="--i:3">    --local-audio off \</span><span class="ln" style="--i:4">    --web-gui 0.0.0.0:7373</span><span class="ln" style="--i:5"><span class="o">web GUI: http://10.0.0.5:7373/?t=TOKEN</span></span><span class="ln" style="--i:6"><span class="cur"></span></span></div>
             </div>
           </div>
         </div>
@@ -636,7 +636,7 @@ footer a:hover { color: var(--text); }
         <p>Frequency ranges or single channels, with a web page for the phone if you like.</p>
         <pre><span class="p">$ </span>rfscan --scan-range 144M-146M
 <span class="p">$ </span>rfscan --scan-range 118M-137M:am
-<span class="p">$ </span>rfscan --web-gui 0.0.0.0:8080</pre>
+<span class="p">$ </span>rfscan --web-gui 0.0.0.0:7373</pre>
       </div>
     </div>
     <p class="note">Gain is the most important setting, and <strong>rfscan</strong> cannot guess it. The full guide is in <a href="https://github.com/b4sh/rfscan#quick-start">README</a> and <a href="https://github.com/b4sh/rfscan/blob/main/DOC.md">DOC.md</a>.</p>
