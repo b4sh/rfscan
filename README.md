@@ -85,7 +85,7 @@ Tested on Windows 11 and on a Raspberry Pi 4 (4 GB, Debian 13 64-bit). On the Ra
 
 ## License
 
-Copyright (C) 2026 SQ1KW Chris
+Copyright (C) 2026 Krzysztof Kwiatkowski
 
 rfscan is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
 
