@@ -1182,9 +1182,8 @@ fn run_scan(cli: &Cli, src: &mut SoapySource, rate: f64, log: &mut Log) -> anyho
                     Some(dir) => {
                         let (t, created) = web::stored_token(&dir).map_err(anyhow::Error::msg)?;
                         if created {
-                            logln!(
+                            lognote!(
                                 log,
-                                Level::Info,
                                 "web GUI: a new token saved in {} (delete the file for a new one, or set one with --web-token)",
                                 dir.join(web::TOKEN_FILE).display()
                             );
@@ -1211,7 +1210,7 @@ fn run_scan(cli: &Cli, src: &mut SoapySource, rate: f64, log: &mut Log) -> anyho
                 web_audio,
             )
             .map_err(anyhow::Error::msg)?;
-            logln!(log, Level::Info, "web GUI: {}", server.url);
+            lognote!(log, "web GUI: {}", server.url);
             if !addr.ip().is_loopback() {
                 logwarn!(
                     log,
@@ -1493,6 +1492,19 @@ fn main() -> std::process::ExitCode {
     }
 }
 
+/// The SoapySDR log threshold for `--console-level error` and `warn`; with `info` and `debug`
+/// the SoapySDR default (info) stays. Text a driver prints by itself is not affected.
+fn set_soapy_log_level(level: log::ConsoleLevel) {
+    let soapy = match level {
+        log::ConsoleLevel::Error => soapysdr_sys::SOAPY_SDR_ERROR,
+        log::ConsoleLevel::Warn => soapysdr_sys::SOAPY_SDR_WARNING,
+        log::ConsoleLevel::Info | log::ConsoleLevel::Debug => return,
+    };
+    // SAFETY: SoapySDR_setLogLevel only stores the threshold (an integer) in the library; it
+    // takes no pointers and is called before any device is opened.
+    unsafe { soapysdr_sys::SoapySDR_setLogLevel(soapy) };
+}
+
 /// A hint for an error (or one of its causes) that points to the receiver settings.
 fn receiver_hint(e: &anyhow::Error) -> Option<&'static str> {
     e.chain()
@@ -1574,6 +1586,8 @@ Audio outputs (--audio-device):"
         Some(path) => Log::open(path, cli.log_level).map_err(anyhow::Error::msg)?,
         None => Log::console(),
     };
+    log.set_console_level(cli.console_level);
+    set_soapy_log_level(cli.console_level);
     if let Some(path) = &cli.log {
         logln!(
             log,
@@ -1592,7 +1606,8 @@ Audio outputs (--audio-device):"
 
     let (format, full_scale) = src.stream_format();
     if format.name() != src.native_format_name() {
-        eprintln!(
+        logwarn!(
+            log,
             "WARNING: native format {} is not supported, using {} (conversion in SoapySDR costs CPU)",
             src.native_format_name(),
             format.name()
@@ -1637,11 +1652,7 @@ Audio outputs (--audio-device):"
         let result = run_scan(&cli, &mut src, rate, &mut log);
         match &result {
             Ok(()) => logln!(log, Level::Info, "=== rfscan: session end ==="),
-            Err(e) => logln!(
-                log,
-                Level::Info,
-                "=== rfscan: session ended with an error: {e:#} ==="
-            ),
+            Err(e) => logerr!(log, "=== rfscan: session ended with an error: {e:#} ==="),
         }
         return result;
     };
@@ -1762,7 +1773,7 @@ mod tests {
         for want in [
             "[Service]",
             "User=@USER@",
-            "ExecStart=@BIN@",
+            "ExecStart=@BIN@ --console-level warn",
             "Restart=on-failure",
             "NoNewPrivileges=yes",
             "ProtectSystem=full",

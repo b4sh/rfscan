@@ -450,6 +450,15 @@ mod tests {
         // Removed: the console mode is the default.
         let err = e("headless = true\n");
         assert!(err.contains("unknown option"), "{err}");
+        // The console level from the file; the command line wins.
+        use crate::log::ConsoleLevel;
+        let c = run(&[], "console-level = \"warn\"\n").unwrap();
+        assert_eq!(c.console_level, ConsoleLevel::Warn);
+        let c = run(&["--console-level", "info"], "console-level = \"warn\"\n").unwrap();
+        assert_eq!(c.console_level, ConsoleLevel::Info);
+        assert_eq!(run(&[], "").unwrap().console_level, ConsoleLevel::Debug);
+        let err = e("console-level = \"loud\"\n");
+        assert!(err.starts_with("test.conf:1: console-level:"), "{err}");
         // The web GUI address as a number (the port) or text.
         assert_eq!(
             run(&[], "web-gui = 9000\n")

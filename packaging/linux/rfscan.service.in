@@ -1,7 +1,8 @@
 # rfscan as a service, installed by packaging/linux/install.sh --service.
 # @USER@ and @BIN@ are filled in by the script. All settings come from that user's
 # ~/.config/rfscan/rfscan.conf (e.g. web-gui = "0.0.0.0:7373", local-audio = "off").
-# Log: journalctl -u rfscan -f
+# Log: journalctl -u rfscan -f (errors, warnings and the web GUI link only;
+# another level: sudo systemctl edit rfscan). Full log: log = "FILE" in rfscan.conf.
 
 [Unit]
 Description=rfscan radio scanner
@@ -12,7 +13,7 @@ After=network-online.target sound.target
 [Service]
 Type=simple
 User=@USER@
-ExecStart=@BIN@
+ExecStart=@BIN@ --console-level warn
 # A receiver not plugged in yet is tried again.
 Restart=on-failure
 RestartSec=10

@@ -1,6 +1,9 @@
 //! Program output: console and an optional log file with levels.
 //!
-//! The console gets everything except the details written only to the file (`logfile!`). The
+//! The console gets the lines up to `--console-level` (default everything) except the details
+//! written only to the file (`logfile!`): errors, then warnings (`logwarn!`), then detected
+//! transmissions and the session start and end (`Level::Info`), then the rest. Lines from
+//! `lognote!` (the web GUI link) are printed at every level. The
 //! file (`--log PATH`, appended) gets lines with a level not higher than `--log-level`: `info` is
 //! detected transmissions (LOCKED, returns, HANG) plus session start and end, `debug` is
 //! everything. Each file line starts with the local date and time. Scanner events (`logev!`)
@@ -36,6 +39,35 @@ impl Level {
     }
 }
 
+/// Console level (`--console-level`): the lines up to this class reach the console.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ConsoleLevel {
+    Error,
+    Warn,
+    Info,
+    Debug,
+}
+
+impl ConsoleLevel {
+    pub fn parse(s: &str) -> Result<ConsoleLevel, String> {
+        match s.to_ascii_lowercase().as_str() {
+            "error" => Ok(ConsoleLevel::Error),
+            "warn" => Ok(ConsoleLevel::Warn),
+            "info" => Ok(ConsoleLevel::Info),
+            "debug" => Ok(ConsoleLevel::Debug),
+            _ => Err(format!("'{s}': expected error, warn, info or debug")),
+        }
+    }
+
+    /// The class of an ordinary line or event of file level `level`.
+    fn of(level: Level) -> ConsoleLevel {
+        match level {
+            Level::Info => ConsoleLevel::Info,
+            Level::Debug => ConsoleLevel::Debug,
+        }
+    }
+}
+
 /// Where a line goes.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Target {
@@ -53,6 +85,11 @@ pub struct Log {
     paint: String,
     /// Whether lines go to the console (off while the TUI owns the terminal).
     console: bool,
+    /// `--console-level`.
+    console_level: ConsoleLevel,
+    /// The last line was printed on the console (tests).
+    #[cfg(test)]
+    printed: bool,
     /// Colors on stdout and stderr: only when they are terminals.
     color_out: bool,
     color_err: bool,
@@ -67,6 +104,9 @@ impl Log {
             buf: String::new(),
             paint: String::new(),
             console: true,
+            console_level: ConsoleLevel::Debug,
+            #[cfg(test)]
+            printed: false,
             color_out: color_on(std::io::stdout().is_terminal()),
             color_err: color_on(std::io::stderr().is_terminal()),
         }
@@ -75,6 +115,11 @@ impl Log {
     /// Turns console output on or off (the file is written either way).
     pub fn set_console(&mut self, on: bool) {
         self.console = on;
+    }
+
+    /// `--console-level`.
+    pub fn set_console_level(&mut self, level: ConsoleLevel) {
+        self.console_level = level;
     }
 
     /// Console and file `path` (appended) with level `level`.
@@ -94,29 +139,46 @@ impl Log {
 
     /// A line to the console (stdout or stderr) and, if the level allows, to the file.
     pub fn line(&mut self, level: Level, to_stderr: bool, args: std::fmt::Arguments) {
-        let target = if to_stderr {
-            Target::Stderr
+        let (target, class) = if to_stderr {
+            (Target::Stderr, ConsoleLevel::Warn)
         } else {
-            Target::Stdout
+            (Target::Stdout, ConsoleLevel::of(level))
         };
-        self.write(level, target, None, args);
+        self.write(level, target, class, None, args);
+    }
+
+    /// A line printed at every console level (the web GUI link), `Level::Info` in the file.
+    pub fn note(&mut self, args: std::fmt::Arguments) {
+        self.write(Level::Info, Target::Stdout, ConsoleLevel::Error, None, args);
+    }
+
+    /// An error line (the end of a session with an error), `Level::Info` in the file.
+    pub fn error(&mut self, args: std::fmt::Arguments) {
+        self.write(Level::Info, Target::Stderr, ConsoleLevel::Error, None, args);
     }
 
     /// A line to the file only (with the level check), e.g. the window list of the plan.
     pub fn file_line(&mut self, level: Level, args: std::fmt::Arguments) {
-        self.write(level, Target::File, None, args);
+        self.write(level, Target::File, ConsoleLevel::Debug, None, args);
     }
 
     /// A scanner event that happened at `at`: on the console with the local time, in the file
     /// with the date and time of `at`.
     pub fn event(&mut self, level: Level, at: Instant, args: std::fmt::Arguments) {
-        self.write(level, Target::Stdout, Some(at), args);
+        self.write(
+            level,
+            Target::Stdout,
+            ConsoleLevel::of(level),
+            Some(at),
+            args,
+        );
     }
 
     fn write(
         &mut self,
         level: Level,
         target: Target,
+        class: ConsoleLevel,
         at: Option<Instant>,
         args: std::fmt::Arguments,
     ) {
@@ -132,7 +194,12 @@ impl Log {
         }
         let time = at.map(local_time);
         // A console write error (e.g. a closed pipe) does not stop the scanner.
-        if self.console && target != Target::File {
+        let print = self.console && target != Target::File && class <= self.console_level;
+        #[cfg(test)]
+        {
+            self.printed = print;
+        }
+        if print {
             let color = match target {
                 Target::Stderr => self.color_err,
                 _ => self.color_out,
@@ -305,6 +372,23 @@ macro_rules! logwarn {
     };
 }
 
+/// `lognote!(log, "...", args)`: a line on the console at every `--console-level` (the web GUI
+/// link), at info level in the file.
+#[macro_export]
+macro_rules! lognote {
+    ($log:expr, $($arg:tt)*) => {
+        $log.note(format_args!($($arg)*))
+    };
+}
+
+/// `logerr!(log, "...", args)`: an error line to stderr, at info level in the file.
+#[macro_export]
+macro_rules! logerr {
+    ($log:expr, $($arg:tt)*) => {
+        $log.error(format_args!($($arg)*))
+    };
+}
+
 /// `logev!(log, Level::Info, instant, "...", args)`: a scanner event at `instant`, with the
 /// local time on the console.
 #[macro_export]
@@ -361,6 +445,61 @@ mod tests {
         assert_eq!(t.lines().count(), 4, "{t}");
         assert!(t.contains("[status] detail") && t.contains("WARNING: warning"));
         assert!(t.contains("window  0: file only"));
+    }
+
+    #[test]
+    fn console_level_filters_lines() {
+        // Error, warning, transmission, session start, detail, link, file only.
+        let printed = |level: ConsoleLevel| {
+            let mut log = Log::console();
+            log.set_console_level(level);
+            let mut out = Vec::new();
+            crate::logerr!(log, "=== rfscan: session ended with an error: x ===");
+            out.push(log.printed);
+            crate::logwarn!(log, "WARNING: warning");
+            out.push(log.printed);
+            crate::logev!(log, Level::Info, Instant::now(), "LOCKED  transmission");
+            out.push(log.printed);
+            crate::logln!(log, Level::Info, "=== rfscan: session start () ===");
+            out.push(log.printed);
+            crate::logln!(log, Level::Debug, "[status] detail");
+            out.push(log.printed);
+            crate::lognote!(log, "web GUI: http://127.0.0.1:7373/");
+            out.push(log.printed);
+            crate::logfile!(log, Level::Debug, "  window  0: file only");
+            out.push(log.printed);
+            out
+        };
+        let (t, f) = (true, false);
+        assert_eq!(printed(ConsoleLevel::Error), [t, f, f, f, f, t, f]);
+        assert_eq!(printed(ConsoleLevel::Warn), [t, t, f, f, f, t, f]);
+        assert_eq!(printed(ConsoleLevel::Info), [t, t, t, t, f, t, f]);
+        assert_eq!(printed(ConsoleLevel::Debug), [t, t, t, t, t, t, f]);
+        // The TUI owns the terminal: nothing on the console.
+        let mut log = Log::console();
+        log.set_console(false);
+        crate::lognote!(log, "web GUI: x");
+        assert!(!log.printed);
+    }
+
+    #[test]
+    fn console_level_does_not_change_the_file() {
+        let dir = std::env::temp_dir().join(format!("rfscan-log-cl-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("rfscan.log");
+        {
+            let mut log = Log::open(&path, Level::Info).unwrap();
+            log.set_console_level(ConsoleLevel::Error);
+            crate::logev!(log, Level::Info, Instant::now(), "LOCKED  transmission");
+            crate::lognote!(log, "web GUI: link");
+            crate::logerr!(log, "=== error ===");
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(text.lines().count(), 3, "{text}");
+        assert_eq!(ConsoleLevel::parse("WARN"), Ok(ConsoleLevel::Warn));
+        let e = ConsoleLevel::parse("x").unwrap_err();
+        assert!(e.contains("error, warn, info or debug"), "{e}");
     }
 
     #[test]

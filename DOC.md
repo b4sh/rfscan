@@ -63,13 +63,14 @@ On Linux `--list-devices` lists every ALSA device of a sound card (`hw:`, `plugh
 
 `rfscan --list-devices` shows the receivers SoapySDR sees, with their frequency ranges, sample rates, gain stages, sample format, driver settings and stream arguments, plus the SoapySDR version and module diagnostics (useful when no receiver is found). Sound cards (SoapySDR `driver=audio`) are listed but never used as receivers. `--device` chooses a receiver in Soapy syntax, e.g. `--device driver=rtlsdr` or `--device driver=airspy,serial=...`; without it rfscan takes the first free one.
 
-**As a service (Linux, Raspberry Pi).** `packaging/linux/install.sh --service` also installs a systemd service, `/etc/systemd/system/rfscan.service`, and starts it: rfscan runs as the user who ran the script, starts at boot, is started again after an error (e.g. a receiver not plugged in yet) and needs no `screen` or open SSH session. It is started without options, so every setting comes from that user's `~/.config/rfscan/rfscan.conf`, e.g.
+**As a service (Linux, Raspberry Pi).** `packaging/linux/install.sh --service` also installs a systemd service, `/etc/systemd/system/rfscan.service`, and starts it: rfscan runs as the user who ran the script, starts at boot, is started again after an error (e.g. a receiver not plugged in yet) and needs no `screen` or open SSH session. It is started with `--console-level warn` (only errors, warnings and the web GUI link go to the system log, which spares the SD card), and every other setting comes from that user's `~/.config/rfscan/rfscan.conf`, e.g.
 
 ```
 scan-range = ["144M-146M", "430M-440M:12.5k"]
 gain = "agc=true"
 web-gui = "0.0.0.0:7373"     # the web page for a phone in the home network
 local-audio = "off"          # no sound card
+log = "/home/USER/rfscan.log"  # optional: the detected transmissions in a file of their own
 ```
 
 ```
@@ -79,7 +80,15 @@ sudo systemctl stop rfscan           # stops cleanly: the activity log is saved,
 sudo systemctl disable --now rfscan  # stop it and do not start it at boot
 ```
 
-`install.sh --uninstall` removes the service together with the program.
+Another console level for the service (the command line of the service wins over `rfscan.conf`): `sudo systemctl edit rfscan`, add
+
+```
+[Service]
+ExecStart=
+ExecStart=/usr/local/bin/rfscan --console-level info
+```
+
+and restart the service. `install.sh --uninstall` removes the service together with the program.
 
 ## Receiver setup
 
@@ -317,6 +326,8 @@ By default rfscan writes events and the log to the console (without `--tui`; the
 ```
 
 `locked` is repeated every second during a transmission, `status` (scan speed, overflows) right after the start and then every 30 s, `rejected` marks hits rejected by the confirmation. On a terminal the lines are colored (LOCKED green, HANG yellow, rejected hits and the status dimmed); in a redirected output and in the log file there are no colors.
+
+`--console-level` limits what reaches the console: `error` only errors, `warn` also warnings, `info` also the detected transmissions and the session start and end, `debug` (default) everything. The web GUI link is printed at every level, and the log file keeps its own `--log-level`. Text that a receiver driver prints by itself (e.g. `Found Rafael Micro R828D tuner`, or `O` for a stream overflow) cannot be filtered.
 
 `--log FILE` appends a log with the date and time of every line: with `--log-level info` (default) the transmissions and the session start and end, with `--log-level debug` everything, including the window list of the scan plan. `--duration SECONDS` ends the run after the given time.
 

@@ -317,6 +317,14 @@ pub struct Cli {
     #[arg(long, hide_short_help = true, default_value = "info", value_parser = crate::log::Level::parse, value_name = "info|debug", help_heading = H_OTHER)]
     pub log_level: crate::log::Level,
 
+    /// Console level: error, warn, info (transmissions) or debug (everything)
+    ///
+    /// Console level: error (errors only), warn (also warnings), info (also detected
+    /// transmissions and the session start and end) or debug (everything). The web GUI link is
+    /// always printed. The log file keeps its own --log-level
+    #[arg(long, hide_short_help = true, default_value = "debug", value_parser = crate::log::ConsoleLevel::parse, value_name = "error|warn|info|debug", help_heading = H_OTHER)]
+    pub console_level: crate::log::ConsoleLevel,
+
     /// Terminal interface (TUI) instead of the console log
     ///
     /// Terminal interface (TUI) instead of the default console mode (events and the log on the
