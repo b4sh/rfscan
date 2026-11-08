@@ -148,8 +148,7 @@ h2 { font-size: clamp(36px, 5.4vw, 68px); line-height: 1.04; font-weight: 400; m
 .card .ic svg { width: 24px; height: 24px; }
 
 /* Screenshots */
-.shots { display: grid; grid-template-columns: 1fr 300px; gap: 40px; align-items: center; }
-@media (max-width: 900px) { .shots { grid-template-columns: 1fr; } }
+.shots { max-width: 860px; margin: 0 auto; }
 .shot { margin: 0; }
 .frame {
   padding: 10px; border-radius: var(--radius); border: 1px solid var(--line);
@@ -160,13 +159,6 @@ h2 { font-size: clamp(36px, 5.4vw, 68px); line-height: 1.04; font-weight: 400; m
 #dmr { padding-bottom: 40px; }
 .shot.video { max-width: 860px; margin: 0 auto; }
 .shot figcaption { color: var(--faint); font-size: 16px; margin-top: 16px; text-align: center; }
-.phone {
-  width: 280px; max-width: 100%; margin: 0 auto;
-  border-radius: 42px; padding: 12px; background: #101114;
-  border: 1px solid var(--line2); box-shadow: 0 40px 100px rgba(0, 0, 0, .6), 0 0 90px rgba(212, 251, 60, .07);
-}
-.phone .screen { border-radius: 30px; overflow: hidden; background: #1a1a1a; }
-.phone .screen img { display: block; width: 100%; height: auto; }
 
 /* Receivers table */
 .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card-bg); }
@@ -546,8 +538,8 @@ footer a:hover { color: var(--text); }
   <div class="wrap">
     <div class="head-c reveal">
       <span class="eyebrow">Interfaces</span>
-      <h2>In the terminal and in your pocket</h2>
-      <p class="sub">The TUI shows the window being scanned, the noise floor, the detection history and the statistics. The web GUI gives you the same scanner, with audio, on a phone.</p>
+      <h2>Not only in the browser</h2>
+      <p class="sub">Besides the web GUI, <strong>rfscan</strong> has a text interface. Start it with <code>--tui</code> to follow the window being scanned, the noise floor, the detection history and the statistics, and to control the scanner from the keyboard. It also plays the audio on the local sound card, so one computer with a receiver is all you need.</p>
     </div>
     <div class="shots">
       <figure class="shot reveal">
@@ -555,12 +547,6 @@ footer a:hover { color: var(--text); }
           <img src="img/screenshot-tui.png" width="1177" height="856" loading="lazy" alt="rfscan scanning the 2 m band in the terminal">
         </div>
         <figcaption>The TUI scanning the 2 m band with an Airspy Mini</figcaption>
-      </figure>
-      <figure class="shot reveal">
-        <div class="phone"><div class="screen">
-          <img src="img/screenshot-web.png" width="426" height="853" loading="lazy" alt="The rfscan web GUI on a phone, scanning the 2 m band">
-        </div></div>
-        <figcaption>The web GUI on a phone, with an SDRplay RSP1A</figcaption>
       </figure>
     </div>
   </div>
