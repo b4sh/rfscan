@@ -24,19 +24,23 @@
   --card: #202227;
   --card2: #2a2d33;
   --line: #33363d;
-  --text: #ffffff;
-  --dim: #b4b4b8;
+  --text: #dcdee3;
+  --dim: #a2a5ac;
   --faint: #74767c;
   --accent: #d4fb3c;
   --on-accent: #0a0b0d;
   --name: #d4fb3c;
-  --scan: #e6e7ea;
+  --scan: #cfd2d8;
   --scanbar: #dcf09a;
   --lock: #d4fb3c;
   --hang: #f0c24b;
   --pause: #b3a6e8;
   --danger: #ff5f56;
   --digi: #e17bd2;
+  --am: #6cb8ff;
+  --nfm: #45d6b0;
+  --btn-grad: linear-gradient(180deg, rgba(255, 255, 255, .09), rgba(255, 255, 255, 0) 55%, rgba(0, 0, 0, .14));
+  --hover: brightness(1.15);
   --radius: 8px;
   color-scheme: dark;
 }
@@ -60,6 +64,10 @@
   --pause: #65549f;
   --danger: #c0352c;
   --digi: #a3338f;
+  --am: #1f6fc0;
+  --nfm: #0f8a6c;
+  --btn-grad: linear-gradient(180deg, rgba(255, 255, 255, .75), rgba(255, 255, 255, 0) 60%, rgba(0, 0, 0, .06));
+  --hover: brightness(.95);
   color-scheme: light;
 }
 
@@ -87,7 +95,7 @@ header {
 .grow { flex: 1; }
 .pill { padding: 2px 8px; border-radius: 5px; font-weight: 700; font-size: 12px; letter-spacing: .6px; border: 1.5px solid currentColor; white-space: nowrap; }
 .conn { width: 9px; height: 9px; border-radius: 50%; background: var(--lock); flex: none; }
-.theme { border: 1px solid var(--line); background: var(--card); border-radius: 6px; width: 32px; height: 28px; cursor: pointer; font-size: 14px; }
+.theme { border: 1px solid var(--line); background-color: var(--card); border-radius: 6px; width: 32px; height: 28px; cursor: pointer; font-size: 14px; }
 
 /* layout */
 .layout { padding: 10px 16px 84px; max-width: 1400px; margin: 0 auto; }
@@ -141,7 +149,9 @@ body:not([data-tab="main"]) #main { display: none; }
 .bar { position: relative; height: 14px; border-radius: 4px; background: var(--card2); margin: 6px 0 3px; overflow: hidden; }
 .bar .fill { position: absolute; inset: 0 auto 0 0; background: var(--lock); border-radius: 4px; transition: width .15s; }
 .hang .bar .fill { background: var(--faint); }
-.bar .mark { position: absolute; top: 0; bottom: 0; width: 3px; background: var(--text); }
+/* the marks sit on whole pixels, so their outline is equal on both sides */
+.bar .mark { position: absolute; top: 0; bottom: 0; width: 3px; margin-left: -1px; background: var(--text); box-shadow: -2px 0 0 var(--bg), 2px 0 0 var(--bg);
+  left: calc(var(--x, 0) * 1%); left: round(calc(var(--x, 0) * 1%), 1px); }
 .bar .mark.exit { background: var(--hang); }
 .barlegend { display: flex; justify-content: space-between; font-size: 11px; color: var(--dim); }
 .barlegend .exitlbl { color: var(--hang); }
@@ -166,17 +176,17 @@ body:not([data-tab="main"]) #main { display: none; }
 /* controls */
 .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .btn {
-  min-height: 46px; border-radius: 6px; border: 1px solid var(--line); background: var(--card2);
+  min-height: 46px; border-radius: 6px; border: 1px solid var(--line); background-color: var(--card2);
   font-size: 15px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 6px;
   cursor: pointer; user-select: none;
 }
 .btn[hidden] { display: none; }
 .btn:active { transform: scale(.97); }
 .btn:disabled { opacity: .35; }
-.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-.btn.warn { color: var(--danger); border-color: var(--danger); background: transparent; }
-.btn.on { background: var(--lock); border-color: var(--lock); color: var(--on-accent); }
-.btn.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+.btn.primary { background-color: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.btn.warn { color: var(--danger); border-color: var(--danger); background-color: transparent; }
+.btn.on { background-color: var(--lock); border-color: var(--lock); color: var(--on-accent); }
+.btn.danger { background-color: var(--danger); border-color: var(--danger); color: #fff; }
 .squelch { grid-column: 1 / -1; display: grid; grid-template-columns: 56px 1fr 56px; align-items: center; gap: 8px; }
 .squelch .val { text-align: center; }
 .squelch .val b { font-size: 21px; }
@@ -190,8 +200,8 @@ body:not([data-tab="main"]) #main { display: none; }
 
 /* lists: phone = two compact lines per row, large screen = columns; everything left-aligned */
 .listtabs { display: none; gap: 6px; margin-bottom: 10px; }
-.listtabs button { flex: 1; min-height: 38px; border-radius: 6px; border: 1px solid var(--line); background: var(--card2); font-weight: 700; cursor: pointer; }
-.listtabs button.active { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.listtabs button { flex: 1; min-height: 38px; border-radius: 6px; border: 1px solid var(--line); background-color: var(--card2); font-weight: 700; cursor: pointer; }
+.listtabs button.active { background-color: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .listpane { display: none; }
 body[data-list="history"] #pane-history,
 body[data-list="activity"] #pane-activity,
@@ -205,15 +215,15 @@ body.norec [data-l="recs"], body.norec [data-t="recs"] { display: none; }
 #pane-recs .listhead .stats { flex: none; white-space: nowrap; }
 #recBack { flex: none; white-space: nowrap; }
 #pane-recs .lrow .acts .smallbtn { min-width: 64px; }
-#pane-recs .lrow .acts .smallbtn.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+#pane-recs .lrow .acts .smallbtn.on { background-color: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 #pane-recs .lrow.file { cursor: default; }
 #pane-recs .rec { color: var(--danger); font-weight: 700; }
 /* the same header band on every list: title, count, action */
 .listhead { display: flex; align-items: center; gap: 12px; min-height: 50px; margin-bottom: 10px; padding: 8px 12px; border-radius: 6px; border-bottom: 1px solid var(--line); background: var(--card2); }
 .listhead h2 { margin: 0; font-size: 17px; }
 .listhead .stats { flex: 1; }
-.listhead .smallbtn { background: var(--card); }
-.listhead .smallbtn.warn { background: var(--danger); border-color: var(--danger); color: #fff; }
+.listhead .smallbtn { background-color: var(--card); }
+.listhead .smallbtn.warn { background-color: var(--danger); border-color: var(--danger); color: #fff; }
 /* list rows: the phone layout (two lines per entry, larger text); the column layout below keeps
    its own sizes */
 .lrow { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; padding: 8px 2px; border-bottom: 1px solid var(--line); font-size: 15px; cursor: pointer; }
@@ -229,7 +239,7 @@ body.norec [data-l="recs"], body.norec [data-t="recs"] { display: none; }
 /* duration of an exclusion: permanent or timed */
 .durs { display: flex; gap: 6px; margin-bottom: 10px; }
 .durs .smallbtn { flex: 1; color: var(--text); }
-.durs .smallbtn.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.durs .smallbtn.on { background-color: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .mode { display: inline-block; width: 38px; text-align: center; font-size: 10px; font-weight: 800; padding: 1px 0; border-radius: 3px; background: var(--card2); color: var(--dim); }
 .mode.digi { color: var(--digi); }
 /* recording: the mark in the lists, the REC pill while a file is written */
@@ -237,7 +247,7 @@ body.norec [data-l="recs"], body.norec [data-t="recs"] { display: none; }
 .recpill { color: #fff; background: var(--danger); border-color: var(--danger); }
 #itRec { accent-color: var(--danger); }
 #pane-activity .lrow.head .rh { display: none; }
-.smallbtn { min-height: 32px; padding: 0 10px; border-radius: 5px; border: 1px solid var(--line); background: var(--card2); font-weight: 700; font-size: 13px; cursor: pointer; }
+.smallbtn { min-height: 32px; padding: 0 10px; border-radius: 5px; border: 1px solid var(--line); background-color: var(--card2); font-weight: 700; font-size: 13px; cursor: pointer; }
 /* activity sort: the headers are always shown, on a phone as sort keys large enough to tap */
 #pane-activity .lrow.head { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 0 10px; font-size: 13px; font-weight: 700; color: var(--faint); text-transform: uppercase; letter-spacing: .3px; cursor: default; }
 #pane-activity .lrow.head [data-sort] { padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--card2); }
@@ -306,10 +316,24 @@ nav.tabs button.active { color: var(--accent); }
 .about a { color: var(--dim); }
 body.nolocal #bMute { display: none; }
 #bMute { grid-column: 1 / -1; }
-#bBackground.on { background: var(--hang); border-color: var(--hang); }
+#bBackground.on { background-color: var(--hang); border-color: var(--hang); }
 .btn.two { flex-direction: column; gap: 1px; padding: 5px 4px; min-width: 0; text-align: center; }
 .btn.two small { font-size: 11px; font-weight: 400; opacity: .8; }
 @media (min-width: 960px) and (orientation: landscape) { .toast { bottom: 20px; } }
+/* a soft gradient on every button, over its own color, a bit brighter under the mouse */
+.btn, .smallbtn, .listtabs button, .theme { background-image: var(--btn-grad); transition: filter .15s; }
+@media (hover: hover) {
+  .btn:hover:not(:disabled), .smallbtn:hover:not(:disabled), .listtabs button:hover, .theme:hover { filter: var(--hover); }
+}
+/* modulation tags: tinted with the mode color, with a soft gradient */
+.mode.am { --m: var(--am); }
+.mode.nfm { --m: var(--nfm); }
+.mode.digi { --m: var(--digi); }
+.mode.am, .mode.nfm, .mode.digi {
+  color: var(--m);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--m) 30%, transparent), color-mix(in srgb, var(--m) 12%, transparent));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--m) 45%, transparent);
+}
 </style>
 </head>
 <body data-tab="main" data-list="history">
@@ -492,7 +516,7 @@ body.nolocal #bMute { display: none; }
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const fmtT = s => Math.floor(s / 60) + ":" + String(Math.floor(s % 60)).padStart(2, "0");
-const modeTag = m => m ? `<span class="mode ${m === "DIGI" ? "digi" : ""}">${esc(m)}</span>` : `<span></span>`;
+const modeTag = m => m ? `<span class="mode ${esc(m.toLowerCase())}">${esc(m)}</span>` : `<span></span>`;
 const fix1 = x => (x == null ? "-" : Number(x).toFixed(1));
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 const recTag = r => `<span class="rec">${r ? "✓" : ""}</span>`;
@@ -820,8 +844,8 @@ function renderDisplay() {
   setText("dSnr", L ? fix1(L.snr) : "-");
   setText("dPeakSnr", L ? fix1(L.peak_snr) : "-");
   $("dFill").style.width = (L ? pct(L.snr) : 0) + "%";
-  $("dEntry").style.left = (st ? pct(st.squelch) : 0) + "%";
-  $("dExit").style.left = (st ? pct(st.squelch - st.hyst) : 0) + "%";
+  $("dEntry").style.setProperty("--x", st ? pct(st.squelch) : 0);
+  $("dExit").style.setProperty("--x", st ? pct(st.squelch - st.hyst) : 0);
   setText("dLegend", st ? `squelch ${st.squelch} · ` : "");
   setText("dLegendExit", st ? `exit ${fix1(st.squelch - st.hyst)}` : "");
   setText("dRssi", L ? fix1(L.rssi) + " dBFS" : "-");
