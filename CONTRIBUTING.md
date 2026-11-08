@@ -9,7 +9,7 @@ Open an issue with:
 - the rfscan version (`rfscan -V`) and the system (Windows version, Linux distribution);
 - the receiver and the output of `rfscan --list-devices`;
 - the full command line (and your `rfscan.conf`, if you use one);
-- what happened and what you expected; the console output of a run with `--headless --log FILE --log-level debug` helps a lot.
+- what happened and what you expected; the console output of a run with `--log FILE --log-level debug` helps a lot.
 
 ## Receivers
 
