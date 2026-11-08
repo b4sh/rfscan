@@ -7,7 +7,11 @@
 <meta name="description" content="A fast radio scanner for SDR receivers, running in the terminal. Sweeps whole bands in wide FFT windows, stops on a signal, plays AM, NFM and digital voice, and has a web GUI for your phone.">
 <meta property="og:title" content="rfscan: fast SDR radio scanner">
 <meta property="og:description" content="Scan whole bands in seconds with an Airspy, RTL-SDR or SDRplay. Terminal UI, console mode and a web GUI for your phone.">
-<meta property="og:image" content="https://rfscan.sq1kw.info/img/logo-256.png">
+<meta property="og:image" content="https://rfscan.sq1kw.info/img/og-image.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The rfscan web GUI: the scanner panel with its controls and the detection history">
+<meta name="twitter:card" content="summary_large_image">
 <meta name="theme-color" content="#16181c">
 <link rel="icon" type="image/png" href="img/logo-180.png">
 <link rel="apple-touch-icon" href="img/logo-180.png">
@@ -26,7 +30,6 @@
   --faint: #74767c;
   --lime: #d4fb3c;
   --ink: #0a0b0d;
-  --amber: #f0c24b;
   --mono: ui-monospace, "Cascadia Mono", "JetBrains Mono", Consolas, Menlo, monospace;
   --sans: "Clash Grotesk", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --radius: 28px;
@@ -114,25 +117,9 @@ nav .links a.btn { opacity: 1; }
 @media (max-width: 700px) { .hero { padding-top: 56px; } .hero p.lead { font-size: 19px; } }
 @media (max-width: 420px) { .badges { font-size: 16px; gap: 6px 6px; } .badges .sep { font-size: 9px; } }
 
-/* Spectrum demo */
-.scope {
-  position: relative; margin: 76px auto 0; text-align: left;
-  background: radial-gradient(120% 140% at 50% 0%, var(--card-a) 0%, var(--card-b) 100%);
-  border: 1px solid var(--line); border-radius: var(--radius);
-  padding: 22px 26px 16px;
-  box-shadow: 0 40px 120px rgba(0, 0, 0, .6);
-}
-.scope .head, .scope .foot { display: flex; justify-content: space-between; align-items: center; gap: 12px; font: 15px var(--mono); color: var(--faint); white-space: nowrap; }
-.scope .head { min-height: 28px; }
-.scope .head .fq { font: 500 24px/1 var(--sans); letter-spacing: -.02em; color: var(--lime); }
-.scope .head .st {
-  color: var(--text); font-weight: 700; border: 1px solid var(--line2); border-radius: 999px; padding: 2px 12px;
-  transition: background .2s, color .2s, border-color .2s;
-}
-.scope .head .st.lock { color: var(--ink); background: var(--lime); border-color: var(--lime); }
-.scope .head .st.hang { color: var(--ink); background: var(--amber); border-color: var(--amber); }
-.scope canvas { display: block; width: 100%; height: 190px; margin: 14px 0 8px; }
-@media (max-width: 600px) { .scope { padding: 16px 16px 12px; border-radius: 20px; } .scope canvas { height: 130px; } }
+/* Hero screenshot */
+.hero-shot { display: block; width: 100%; max-width: 1132px; height: auto; margin: 64px auto 0; filter: drop-shadow(0 30px 70px rgba(0, 0, 0, .6)); }
+@media (max-width: 600px) { .hero-shot { margin-top: 44px; } }
 
 /* Sections */
 section { position: relative; padding: 120px 0; }
@@ -383,14 +370,7 @@ footer a:hover { color: var(--text); }
       <span>AGPL-3.0</span>
     </div>
 
-    <div class="scope reveal" aria-hidden="true">
-      <div class="head">
-        <span class="st" id="sState">● SCANNING</span>
-        <span class="fq" id="sFreq"></span>
-      </div>
-      <canvas id="scope"></canvas>
-      <div class="foot"><span>144</span><span>145</span><span>146</span></div>
-    </div>
+    <img class="hero-shot reveal" src="img/screenshot-gui.webp" width="1132" height="774" alt="The rfscan web GUI in a desktop window: the scanner panel with its controls on the left, the detection history on the right">
   </div>
 </header>
 
@@ -700,122 +680,6 @@ footer a:hover { color: var(--text); }
 </footer>
 
 <script>
-// A simulated scan for the hero: the window sweeps the band, stops on a signal
-// above the squelch and plays it, then goes on.
-(() => {
-  const canvas = document.getElementById("scope");
-  const ctx = canvas.getContext("2d");
-  const $ = id => document.getElementById(id);
-  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
-
-  const LO = 144.0, HI = 146.0, STEP = 0.0125;
-  const N = Math.round((HI - LO) / STEP);
-  const WIN = 40;                      // channels per window
-  const SQUELCH = 18;
-  const noise = new Float32Array(N);
-  const level = new Float32Array(N);
-  let signals = [];                    // { ch, snr, until }
-  let win = 0, state = "scan", stateUntil = 0, lockCh = -1, last = 0;
-
-  function resize() {
-    const r = canvas.getBoundingClientRect();
-    const dpr = Math.min(devicePixelRatio || 1, 2);
-    canvas.width = Math.round(r.width * dpr);
-    canvas.height = Math.round(r.height * dpr);
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  }
-
-  function spawn(now) {
-    if (signals.length < 3 && Math.random() < 0.02) {
-      const ch = Math.floor(Math.random() * (N - 4)) + 2;
-      const strong = Math.random() < 0.6;
-      signals.push({ ch, snr: strong ? 22 + Math.random() * 14 : 8 + Math.random() * 7, until: now + 3000 + Math.random() * 6000 });
-    }
-    signals = signals.filter(s => s.until > now);
-  }
-
-  function update(now) {
-    for (let i = 0; i < N; i++) noise[i] = 2 + Math.random() * 3;
-    level.set(noise);
-    for (const s of signals) {
-      for (let d = -2; d <= 2; d++) {
-        const i = s.ch + d;
-        if (i >= 0 && i < N) level[i] = Math.max(level[i], s.snr - Math.abs(d) * 9 + Math.random() * 2);
-      }
-    }
-    const nWin = Math.ceil(N / WIN);
-    if (state === "scan" && now > stateUntil) {
-      win = (win + 1) % nWin;
-      stateUntil = now + 220;
-      const a = win * WIN, b = Math.min(N, a + WIN);
-      const hit = signals.find(s => s.ch >= a && s.ch < b && s.snr >= SQUELCH);
-      if (hit) { state = "lock"; lockCh = hit.ch; }
-    } else if (state === "lock") {
-      const s = signals.find(s => s.ch === lockCh);
-      if (!s) { state = "hang"; stateUntil = now + 1200; }
-    } else if (state === "hang" && now > stateUntil) {
-      state = "scan";
-    }
-  }
-
-  function draw() {
-    const w = canvas.clientWidth, h = canvas.clientHeight;
-    const top = 8, base = h - 4, scale = (base - top) / 40;
-    ctx.clearRect(0, 0, w, h);
-    const cw = w / N;
-    const a = win * WIN, b = Math.min(N, a + WIN);
-
-    // window being measured
-    ctx.fillStyle = "rgba(255, 255, 255, 0.05)";
-    ctx.fillRect(a * cw, 0, (b - a) * cw, h);
-    ctx.strokeStyle = "rgba(212, 251, 60, 0.45)";
-    ctx.lineWidth = 1;
-    ctx.strokeRect(a * cw + .5, .5, (b - a) * cw - 1, h - 1);
-
-    // squelch line
-    const sy = base - SQUELCH * scale;
-    ctx.setLineDash([4, 4]);
-    ctx.strokeStyle = "rgba(240, 194, 75, 0.55)";
-    ctx.beginPath(); ctx.moveTo(0, sy); ctx.lineTo(w, sy); ctx.stroke();
-    ctx.setLineDash([]);
-
-    // channels
-    for (let i = 0; i < N; i++) {
-      const v = level[i];
-      const y = base - v * scale;
-      const locked = (state !== "scan") && i === lockCh;
-      ctx.fillStyle = locked ? "#d4fb3c" : v >= SQUELCH ? "#ffffff" : (i >= a && i < b ? "rgba(230,230,235,.8)" : "rgba(120,122,130,.55)");
-      ctx.fillRect(i * cw + cw * .15, y, Math.max(1, cw * .7), base - y);
-    }
-
-    const st = $("sState");
-    if (state === "scan") {
-      st.textContent = "● SCANNING"; st.className = "st";
-      $("sFreq").textContent = "";
-    } else {
-      st.textContent = state === "lock" ? "● LOCKED" : "● HANG";
-      st.className = state === "lock" ? "st lock" : "st hang";
-      $("sFreq").textContent = (LO + lockCh * STEP).toFixed(3);
-    }
-  }
-
-  function frame(now) {
-    if (now - last > 60) { spawn(now); update(now); draw(); last = now; }
-    requestAnimationFrame(frame);
-  }
-
-  resize();
-  addEventListener("resize", () => { resize(); draw(); });
-  if (reduce) {
-    signals = [{ ch: 30, snr: 26, until: Infinity }, { ch: 120, snr: 12, until: Infinity }];
-    update(0); draw();
-  } else {
-    // seed a signal so a lock shows early
-    signals.push({ ch: 70, snr: 27, until: performance.now() + 5000 });
-    requestAnimationFrame(frame);
-  }
-})();
-
 // Command boxes and the receivers table: the fade at the right edge shows while the box can
 // scroll further.
 document.querySelectorAll("pre, .table-wrap").forEach(el => {
