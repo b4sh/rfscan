@@ -192,6 +192,12 @@ main() {
     fi
     choose_modules
     echo
+    # An installed SDRplay module is not built again (as the installed apt modules).
+    play_present=0
+    if [ "$sdrplay" -eq 1 ] && [ -e "$PLAY_MODULE" ]; then
+        sdrplay=0
+        play_present=1
+    fi
 
     missing=""
     for p in $PACKAGES; do
@@ -286,6 +292,7 @@ main() {
         [ "$chown_play" -eq 0 ] || echo "    give it to $user (sudo chown -R; now owned by $(stat -c %U "$PLAY_SRC")),"
         echo "    build the SDRplay module and install it to $(dirname "$PLAY_MODULE") (sudo)"
     fi
+    [ "$play_present" -eq 0 ] || echo "  - SDRplay module: already installed ($PLAY_MODULE), not built again"
     if [ "$rust" -eq 1 ]; then
         echo "  - install Rust with rustup into $HOME/.cargo (minimal profile; rustup adds"
         echo "    $HOME/.cargo/bin to PATH in your shell profile)"
