@@ -2202,10 +2202,17 @@ mod tests {
         );
         a.key(KeyCode::Esc);
         assert!(a.screen == Screen::Main);
-        // The name on the rule below the scan progress when the scanner is in the named range;
-        // the progress line itself does not change with the name.
+        // While scanning no range name: the sampled window would show one range of many.
         if let Some(s) = &mut a.status {
             s.window = 1;
+            s.state = ScanState::Scanning;
+        }
+        let scanning = render(&a, 120, 32);
+        assert!(!scanning.contains("Airband"), "{scanning}");
+        // The name on the rule below the scan progress when the scanner stands in the named
+        // range; the progress line itself does not change with the name.
+        if let Some(s) = &mut a.status {
+            s.state = ScanState::Paused;
         }
         let main = render(&a, 120, 32);
         assert!(main.contains("├─ Airband ─"), "{main}");

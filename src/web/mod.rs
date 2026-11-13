@@ -891,7 +891,13 @@ fn status_json(ctx: &UiContext, s: &Status, hub: &Hub) -> Value {
         }
         _ => json!([0.0, 1.0]),
     };
-    let range_name = ctx.range_name(r);
+    // Only while the scanner stands still: while scanning, the window sampled for the status
+    // would show one range of many.
+    let range_name = if s.state.stopped() {
+        ctx.range_name(r)
+    } else {
+        None
+    };
     let name = ctx.window_names.get(w).map_or("", String::as_str);
     // The window being measured when the status was sent, also during fast scanning (unlike the
     // TUI, which shows `-` then): the position bar shows all the windows measured meanwhile.

@@ -23,6 +23,13 @@ pub enum ScanState {
     Idle,
 }
 
+impl ScanState {
+    /// The scanner stands on one window (a signal, its hang time or a pause).
+    pub fn stopped(self) -> bool {
+        matches!(self, Self::Locked | Self::Hang | Self::Paused)
+    }
+}
+
 /// Periodic scanner status.
 #[derive(Clone, Copy, Debug)]
 pub struct Status {

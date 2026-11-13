@@ -696,9 +696,13 @@ fn dsd_console(f: &mut Frame, area: Rect, lines: &crate::dsd_fme::ConsoleLines) 
 
 /// The name of the current range (from the scan list) at the start of the rule below the scan
 /// position: a fixed place, so a long name does not move the position bar. It starts in the same
-/// column as the title and the scan position.
+/// column as the title and the scan position. Only while the scanner stands still: while
+/// scanning, the window sampled for the status would show one range of many.
 fn range_name_on_rule(f: &mut Frame, row: Rect, app: &App) {
     let Some(s) = app.status else { return };
+    if !s.state.stopped() {
+        return;
+    }
     let ctx = &app.ctx;
     let w = s.window.min(ctx.window_range.len().saturating_sub(1));
     let r = ctx.window_range.get(w).copied().unwrap_or(0);
