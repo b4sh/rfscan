@@ -71,6 +71,7 @@ choose_modules() {
         i=$((i + 1))
         mark=""
         ! installed_module "$name" || mark=" [installed]"
+        [ "$name" != rtlsdr ] || mark="$mark [default]"
         printf '  %2d) %-10s %s%s\n' "$i" "$name" "$desc" "$mark"
     done
     mark=""
