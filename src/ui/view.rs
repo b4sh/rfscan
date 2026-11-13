@@ -615,6 +615,7 @@ fn main_screen(f: &mut Frame, inner: Rect, app: &App) {
     .areas(inner);
     f.render_widget(Paragraph::new(progress), top);
     rule(f, inner, sep1, ("", ""), None);
+    range_name_on_rule(f, sep1, app);
     f.render_widget(Paragraph::new(center), mid);
     if wide {
         let [h, s] =
@@ -693,13 +694,34 @@ fn dsd_console(f: &mut Frame, area: Rect, lines: &crate::dsd_fme::ConsoleLines) 
     f.render_widget(Paragraph::new(shown), inner);
 }
 
+/// The name of the current range (from the scan list) at the start of the rule below the scan
+/// position: a fixed place, so a long name does not move the position bar. It starts in the same
+/// column as the title and the scan position.
+fn range_name_on_rule(f: &mut Frame, row: Rect, app: &App) {
+    let Some(s) = app.status else { return };
+    let ctx = &app.ctx;
+    let w = s.window.min(ctx.window_range.len().saturating_sub(1));
+    let r = ctx.window_range.get(w).copied().unwrap_or(0);
+    let Some(name) = ctx.range_name(r) else {
+        return;
+    };
+    let shown = format!(" {} ", fit(&name, (row.width as usize).saturating_sub(3)));
+    let area = Rect {
+        x: row.x,
+        y: row.y,
+        width: (shown.chars().count() as u16).min(row.width.saturating_sub(1)),
+        height: 1,
+    };
+    f.render_widget(Paragraph::new(text(shown)), area);
+}
+
 /// Scan position: the range, a bar as wide as the free space showing which part of the range
 /// the current window covers, and the pass, window and cycle (in a narrow window also the
 /// statistics in one line).
 fn progress_lines(app: &App, wide: bool, width: usize) -> Vec<Line<'static>> {
     let ctx = &app.ctx;
     let Some(s) = app.status else {
-        return vec![Line::from(dim("starting…"))];
+        return vec![Line::from(dim(" starting…"))];
     };
     let w = s.window.min(ctx.window_range.len().saturating_sub(1));
     let r = ctx.window_range.get(w).copied().unwrap_or(0);
@@ -713,15 +735,8 @@ fn progress_lines(app: &App, wide: bool, width: usize) -> Vec<Line<'static>> {
     } else {
         name.split_at(name.len().min(1))
     };
-    // The name of the range (from the scan list), when it has one.
-    let name_part = ctx
-        .range_name(r)
-        .map_or_else(String::new, |n| format!(" \"{}\"", fit(&n, 24)));
-    let head = format!(
-        "range: {}/{}  {range}{name_part}  ",
-        r + 1,
-        ctx.ranges.len()
-    );
+    // One leading space: the same column as the title above and the range name below.
+    let head = format!(" range: {}/{}  {range}  ", r + 1, ctx.ranges.len());
     let tail = if wide {
         format!("  pass: {pass}   window: {number}   cycle: {}", s.cycles)
     } else {
@@ -768,7 +783,8 @@ fn progress_lines(app: &App, wide: bool, width: usize) -> Vec<Line<'static>> {
     spans.push(text(tail));
     let mut lines = vec![Line::from(spans)];
     if !wide {
-        lines.push(Line::from(text(fit(&stats_compact(app), width))));
+        let stats = fit(&stats_compact(app), width.saturating_sub(1));
+        lines.push(Line::from(text(format!(" {stats}"))));
     }
     lines
 }

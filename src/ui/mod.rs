@@ -2202,12 +2202,24 @@ mod tests {
         );
         a.key(KeyCode::Esc);
         assert!(a.screen == Screen::Main);
-        // The name next to the scan progress when the scanner is in the named range.
+        // The name on the rule below the scan progress when the scanner is in the named range;
+        // the progress line itself does not change with the name.
         if let Some(s) = &mut a.status {
             s.window = 1;
         }
         let main = render(&a, 120, 32);
-        assert!(main.contains("118.000 - 136.675 MHz \"Airband\""), "{main}");
+        assert!(main.contains("├─ Airband ─"), "{main}");
+        let progress = main.lines().find(|l| l.contains("118.000 - 136.675 MHz"));
+        assert!(progress.is_some_and(|l| !l.contains("Airband")), "{main}");
+        // The title, the scan position and the range name start in the same column.
+        let col = |word: &str| {
+            main.lines()
+                .find_map(|l| l.find(word).map(|b| l[..b].chars().count()))
+        };
+        let title = col("rfscan");
+        assert!(title.is_some(), "{main}");
+        assert_eq!(col("range:"), title, "{main}");
+        assert_eq!(col("Airband"), title, "{main}");
         // Everything off: the idle view says so.
         if let Some(s) = &mut a.status {
             s.state = ScanState::Idle;

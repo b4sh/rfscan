@@ -166,6 +166,7 @@ body:not([data-tab="main"]) #main { display: none; }
 
 .rangehead { font-size: 13px; color: var(--dim); text-align: center; height: 18px; line-height: 18px; white-space: nowrap; overflow: hidden; }
 .rangehead b { color: var(--text); }
+.rangename { color: var(--name); font-weight: 700; text-overflow: ellipsis; }
 .posbar { position: relative; height: 8px; background: var(--card2); border-radius: 3px; margin: 5px 0; overflow: hidden; }
 .posbar .seg { position: absolute; top: 0; bottom: 0; background: var(--scanbar); border-radius: 3px; transition: left .2s; }
 .spectrum { position: relative; display: flex; align-items: flex-end; gap: 1px; height: 64px; margin-top: 4px; border-bottom: 1px solid var(--line); }
@@ -400,6 +401,7 @@ body.nolocal #bMute { display: none; }
         <div class="state row" id="dState"></div>
         <div class="range">
           <div class="rangehead" id="dRangeLine"></div>
+          <div class="rangehead rangename" id="dRangeName"></div>
           <div class="posbar"><div class="seg" id="dSeg"></div></div>
         </div>
         <div class="panel">
@@ -895,9 +897,10 @@ function renderDisplay() {
   // The range and the position bar are always shown: on a lock the bar marks the window where
   // the scanner stopped.
   $("dRangeLine").innerHTML = st
-    ? `range <b>${st.range}/${S.hello ? S.hello.ranges : "-"}</b> · <b>${esc(st.span)}</b>` +
-      (st.range_name ? ` · <b style="color:var(--name)">${esc(st.range_name)}</b>` : "")
+    ? `range <b>${st.range}/${S.hello ? S.hello.ranges : "-"}</b> · <b>${esc(st.span)}</b>`
     : "range <b>-</b>";
+  // The range name in its own line, always there (empty without a name).
+  setText("dRangeName", st && st.range_name ? st.range_name : " ");
   $("dSeg").style.left = (st ? st.pos[0] * 100 : 0) + "%";
   $("dSeg").style.width = (st ? st.pos[1] * 100 : 0) + "%";
 
