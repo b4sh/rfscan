@@ -1914,6 +1914,48 @@ mod tests {
         }
     }
 
+    /// The one-line installer: LF line endings, valid shell syntax, the same apt packages as
+    /// `install.sh`, and the service command it prints works without a build.
+    #[test]
+    fn one_line_installer() {
+        let get = include_str!("../packaging/linux/get.sh");
+        let install = include_str!("../packaging/linux/install.sh");
+        assert!(!get.contains('\r'), "LF line endings");
+        fn packages<'a>(script: &'a str, prefix: &str) -> Vec<&'a str> {
+            let line = script
+                .lines()
+                .find_map(|l| l.strip_prefix(prefix))
+                .unwrap_or_default();
+            let mut list: Vec<&str> = line
+                .trim_end_matches('"')
+                .split_whitespace()
+                .filter(|w| !["sudo", "apt", "install"].contains(w))
+                .collect();
+            list.sort_unstable();
+            list
+        }
+        let from_get = packages(get, "PACKAGES=\"");
+        assert!(from_get.contains(&"libsoapysdr-dev"), "{from_get:?}");
+        assert_eq!(from_get, packages(install, "APT=\""));
+        assert!(get.contains("install.sh\" --no-build --service"));
+        assert!(install.contains("service_only=1"));
+        assert!(
+            get.trim_end().ends_with("main \"$@\""),
+            "runs only when fully read"
+        );
+        if let Ok(out) = std::process::Command::new("sh")
+            .args(["-n", "packaging/linux/get.sh"])
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .output()
+        {
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+
     /// Range bw: range bw=, then --bw, then the step (AM included).
     #[test]
     fn range_bw_defaults_to_step() {

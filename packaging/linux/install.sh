@@ -4,6 +4,8 @@
 #   packaging/linux/install.sh               build as the current user, install with sudo
 #   packaging/linux/install.sh --no-build    install target/release/rfscan as it is
 #   packaging/linux/install.sh --service     also install and start the systemd service
+#                                            (with --no-build and no build: only the service,
+#                                            for the installed $PREFIX/bin/rfscan)
 #   packaging/linux/install.sh --uninstall   remove the installed files and the service
 #
 # Files: $PREFIX/bin/rfscan and $PREFIX/share/doc/rfscan/ (README.md, DOC.md, LICENSE).
@@ -24,7 +26,7 @@ DOCDIR="$PREFIX/share/doc/rfscan"
 APT="sudo apt install build-essential pkg-config clang libclang-dev git libsoapysdr-dev soapysdr-module-rtlsdr soapysdr-module-airspy libasound2-dev"
 
 usage() {
-    sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 build=1
@@ -122,18 +124,29 @@ if [ "$build" -eq 1 ]; then
     (cd "$ROOT" && cargo build --release --locked)
 fi
 
+# --service --no-build without a build (e.g. after the one-line install removed it): only the
+# service, for the program already installed.
+service_only=0
 if [ ! -x "$ROOT/target/release/rfscan" ]; then
-    echo "$ROOT/target/release/rfscan not found: build it first (without --no-build)" >&2
-    exit 1
+    if [ "$build" -eq 0 ] && [ "$service" -eq 1 ] && [ -x "$BIN" ]; then
+        service_only=1
+    else
+        echo "$ROOT/target/release/rfscan not found: build it first (without --no-build)" >&2
+        exit 1
+    fi
 fi
 
-run install -Dm755 "$ROOT/target/release/rfscan" "$BIN"
-run install -Dm644 -t "$DOCDIR" "$ROOT/README.md" "$ROOT/DOC.md" "$ROOT/LICENSE"
-echo "installed $BIN ($("$BIN" --version)) and $DOCDIR"
-case ":$PATH:" in
-    *":$PREFIX/bin:"*) ;;
-    *) echo "note: $PREFIX/bin is not in PATH" ;;
-esac
+if [ "$service_only" -eq 0 ]; then
+    run install -Dm755 "$ROOT/target/release/rfscan" "$BIN"
+    run install -Dm644 -t "$DOCDIR" "$ROOT/README.md" "$ROOT/DOC.md" "$ROOT/LICENSE"
+    echo "installed $BIN ($("$BIN" --version)) and $DOCDIR"
+    case ":$PATH:" in
+        *":$PREFIX/bin:"*) ;;
+        *) echo "note: $PREFIX/bin is not in PATH" ;;
+    esac
+else
+    echo "no build in $ROOT/target: installing only the service for $BIN ($("$BIN" --version))"
+fi
 
 if [ "$service" -eq 1 ]; then
     tmp="$(mktemp)"
