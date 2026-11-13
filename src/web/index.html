@@ -341,7 +341,9 @@ nav.tabs button.active { color: var(--accent); }
   #pane-recs .lrow.file { grid-template-columns: 170px 64px 70px 1fr; }
   #pane-recs .lrow .acts { flex-basis: auto; }
   #pane-scan .lrow.rng { grid-template-columns: 150px 48px 48px 44px minmax(60px, 1fr) 64px; }
-  #pane-scan .lrow.chn { grid-template-columns: 96px minmax(60px, 1fr) 44px 64px 56px minmax(0, 150px); }
+  #pane-scan .lrow.chn { grid-template-columns: 96px 44px minmax(60px, 1fr) fit-content(150px) 40px 40px; }
+  #pane-scan .lrow.chn .chk, #pane-scan .lrow.chn.head span:nth-child(n+5) { justify-self: center; }
+  #pane-scan .lrow.chn .hint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #pane-scan .lrow .chk span { display: none; }
   #pane-scan .lrow > *, #pane-scan .lrow .n, #pane-scan .lrow .br { order: 0; }
   #pane-scan .lrow label.chk:first-of-type { margin-left: 0; }
@@ -1067,10 +1069,10 @@ function renderScan() {
   $("scanCount").textContent = `${sc.on} of ${sc.all} on` + (scanShown.length < sc.items.length ? ` · ${scanShown.length} shown` : "");
   const box = (i, kind, on, dis) => `<label class="chk${kind === "rec" ? " rec" : ""}"><input type="checkbox" data-${kind}="${i}"${on ? " checked" : ""}${dis ? " disabled" : ""}><span>${kind === "rec" ? "Rec" : "Scan"}</span></label>`;
   $("scanList").innerHTML = scanShown.length === 0 ? `<div class="empty">nothing matches the filter</div>` : ch
-    ? `<div class="lrow head chn"><span>Freq</span><span>Name</span><span>Mode</span><span>Scan</span><span>Rec</span><span></span></div>` +
+    ? `<div class="lrow head chn"><span>Freq</span><span>Mode</span><span>Name</span><span></span><span>Scan</span><span>Rec</span></div>` +
       scanShown.map((r, i) => `<div class="lrow chn${r.scan && !r.note ? "" : " offrow"}" data-s="${i}">
-        <span class="f">${esc(r.label)}</span><span class="n">${esc(r.name)}</span><span class="br"></span>${modeTag(r.mode)}
-        ${box(i, "scan", r.scan && r.item != null, !!r.note)}${box(i, "rec", r.rec, false)}<span class="hint">${esc(r.note || "")}</span></div>`).join("")
+        <span class="f">${esc(r.label)}</span>${modeTag(r.mode)}<span class="n">${esc(r.name)}</span><span class="br"></span>
+        <span class="hint">${esc(r.note || "")}</span>${box(i, "scan", r.scan && r.item != null, !!r.note)}${box(i, "rec", r.rec, false)}</div>`).join("")
     : `<div class="lrow head rng"><span>MHz</span><span>Step</span><span>BW</span><span>Mode</span><span>Name</span><span>Scan</span></div>` +
       scanShown.map((r, i) => `<div class="lrow rng${r.scan ? "" : " offrow"}" data-s="${i}">
         <span class="f">${esc(r.label)}</span><span class="c" data-l="step">${esc(r.step)}</span><span class="c" data-l="bw">${esc(r.bw)}</span>${modeTag(r.mode)}
