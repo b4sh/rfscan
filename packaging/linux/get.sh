@@ -286,8 +286,9 @@ main() {
     # Dependencies.
     if [ -n "$missing" ]; then
         sudo apt-get update
+        # Without the recommended packages: libsoapysdr recommends every SoapySDR module.
         # shellcheck disable=SC2086 # a list of package names
-        sudo apt-get install -y $missing
+        sudo apt-get install -y --no-install-recommends $missing
     fi
     if [ "$rust" -eq 1 ]; then
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal

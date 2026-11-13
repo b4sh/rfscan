@@ -1950,6 +1950,8 @@ mod tests {
             );
         }
         assert!(get.contains("install.sh\" --no-build --service"));
+        // libsoapysdr recommends every module: only the chosen ones are installed.
+        assert!(get.contains("apt-get install -y --no-install-recommends $missing"));
         assert!(install.contains("service_only=1"));
         assert!(
             get.trim_end().ends_with("main \"$@\""),
