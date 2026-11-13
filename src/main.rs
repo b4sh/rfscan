@@ -1934,9 +1934,21 @@ mod tests {
             list.sort_unstable();
             list
         }
+        // The fixed list is the one of install.sh without the modules, which are chosen from
+        // the modules apt offers: no module name is fixed in get.sh.
         let from_get = packages(get, "PACKAGES=\"");
         assert!(from_get.contains(&"libsoapysdr-dev"), "{from_get:?}");
-        assert_eq!(from_get, packages(install, "APT=\""));
+        let mut from_install = packages(install, "APT=\"");
+        from_install.retain(|p| !p.starts_with("soapysdr-module-"));
+        assert_eq!(from_get, from_install);
+        for (i, _) in get.match_indices("soapysdr-module-") {
+            let next = get[i + "soapysdr-module-".len()..].chars().next();
+            assert!(
+                matches!(next, Some('\\' | '\'' | '$' | '*')),
+                "a fixed module name in get.sh: {}",
+                &get[i..(i + 40).min(get.len())]
+            );
+        }
         assert!(get.contains("install.sh\" --no-build --service"));
         assert!(install.contains("service_only=1"));
         assert!(

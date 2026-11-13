@@ -45,7 +45,7 @@ Tested on Windows 11 and on a Raspberry Pi 4 (4 GB, Debian 13 64-bit). On the Ra
 
 1. **Get rfscan.**
    - **Windows:** download the zip from [Releases](../../releases) and unpack it. It contains `rfscan.exe` with SoapySDR and the receiver drivers, so nothing else (PothosSDR) is needed.
-   - **Linux and Raspberry Pi** (Debian, Ubuntu, Raspberry Pi OS): one command installs the build packages, Rust and the latest release, after showing what it will install and asking for a confirmation; at the end it asks whether to start rfscan at boot as a systemd service. Run it as a normal user, and again to update:
+   - **Linux and Raspberry Pi** (Debian, Ubuntu, Raspberry Pi OS): one command installs the build packages, the receiver drivers you choose (SoapySDR modules, SDRplay included), Rust and the latest release, after showing what it will install and asking for a confirmation; at the end it asks whether to start rfscan at boot as a systemd service. Run it as a normal user, and again to update:
      ```
      curl -fsSL https://raw.githubusercontent.com/b4sh/rfscan/main/packaging/linux/get.sh | sh
      ```

@@ -5,10 +5,12 @@
 #   ... | sh -s -- --main      the development version (main) instead of the latest release
 #
 # It first prints what it will install and waits for a confirmation; nothing is changed before.
-# Then it installs the missing build packages (apt) and Rust (rustup, into ~/.cargo), keeps the
-# sources in /usr/local/src/rfscan (owned by the user who runs it, synchronized on every run),
-# builds and installs rfscan with packaging/linux/install.sh, asks whether to install the systemd
-# service and removes the build files. Run it again to update.
+# Before that it asks which SoapySDR modules (receiver drivers) to install; SDRplay is built from
+# source when the SDRplay API is installed. Then it installs the missing build packages and the
+# modules (apt) and Rust (rustup, into ~/.cargo), keeps the sources in /usr/local/src/rfscan
+# (owned by the user who runs it, synchronized on every run), builds and installs rfscan with
+# packaging/linux/install.sh, asks whether to install the systemd service and removes the build
+# files. Run it again to update.
 
 set -eu
 
@@ -16,8 +18,13 @@ REPO=https://github.com/b4sh/rfscan
 API=https://api.github.com/repos/b4sh/rfscan
 SRC=/usr/local/src/rfscan
 UNIT=/etc/systemd/system/rfscan.service
-# The same list as APT in install.sh.
-PACKAGES="build-essential pkg-config clang libclang-dev git libsoapysdr-dev soapysdr-module-rtlsdr soapysdr-module-airspy libasound2-dev"
+# The list of APT in install.sh without the module packages: the modules are chosen.
+PACKAGES="build-essential pkg-config clang libclang-dev git libsoapysdr-dev libasound2-dev"
+# SDRplay: the module is not in apt and is built from source when the SDRplay API is installed.
+PLAY_REPO=https://github.com/pothosware/SoapySDRPlay3
+PLAY_SRC=/usr/local/src/SoapySDRPlay3
+PLAY_API=/usr/local/lib/libsdrplay_api.so
+PLAY_MODULE=/usr/local/lib/SoapySDR/modules0.8/libsdrPlaySupport.so
 
 die() {
     echo "error: $*" >&2
@@ -33,6 +40,86 @@ ask() {
         y | Y | yes | YES | Yes) return 0 ;;
         *) return 1 ;;
     esac
+}
+
+installed_pkg() {
+    dpkg-query -W -f='${Status}\n' "$1" 2>/dev/null | grep -q 'install ok installed'
+}
+
+# The SoapySDR modules in apt, one "name|description" line each, without all (every module) and
+# audio (a sound card, not a receiver). The packages independent of the SoapySDR ABI version.
+list_modules() {
+    apt-cache search --names-only '^soapysdr-module-' 2>/dev/null |
+        sed -n 's/^soapysdr-module-\([^ ]*\) - \(.*\)$/\1|\2/p' |
+        sed 's/ (default[^)]*)$//' | grep -v '^\(all\|audio\)|' | sort
+}
+
+# An installed module: its package of any SoapySDR ABI version.
+installed_module() {
+    dpkg-query -W -f='${Status}\n' "soapysdr*-module-$1" 2>/dev/null | grep -q 'install ok installed'
+}
+
+# Asks which modules to install. Sets modules (names) and sdrplay (0/1).
+choose_modules() {
+    mods="$(list_modules)"
+    [ -n "$mods" ] || die "no SoapySDR modules (soapysdr-module-*) in apt: run sudo apt-get update and try again"
+    count="$(printf '%s\n' "$mods" | wc -l)"
+    play=$((count + 1))
+    echo "SoapySDR modules (receiver drivers):"
+    i=0
+    printf '%s\n' "$mods" | while IFS='|' read -r name desc; do
+        i=$((i + 1))
+        mark=""
+        ! installed_module "$name" || mark=" [installed]"
+        printf '  %2d) %-10s %s%s\n' "$i" "$name" "$desc" "$mark"
+    done
+    mark=""
+    [ ! -e "$PLAY_MODULE" ] || mark=" [installed]"
+    [ -e "$PLAY_API" ] || mark="$mark [needs the SDRplay API first: https://www.sdrplay.com/api/]"
+    printf '  %2d) %-10s %s%s\n' "$play" sdrplay "SDRplay RSP devices (SoapySDRPlay3, built from source)" "$mark"
+    while :; do
+        printf 'Modules to install (numbers separated by spaces, none, Enter: rtlsdr): ' >/dev/tty
+        answer=""
+        read -r answer </dev/tty || answer=""
+        modules=""
+        sdrplay=0
+        ok=1
+        if [ -z "$answer" ]; then
+            if printf '%s\n' "$mods" | grep -q '^rtlsdr|'; then
+                modules=rtlsdr
+                break
+            fi
+            echo "rtlsdr is not in apt: choose by number" >/dev/tty
+            continue
+        fi
+        for w in $answer; do
+            case "$w" in
+                none) [ "$answer" = none ] || ok=0 ;;
+                *[!0-9]*) ok=0 ;;
+                *)
+                    if [ "$w" -ge 1 ] && [ "$w" -le "$count" ]; then
+                        name="$(printf '%s\n' "$mods" | sed -n "${w}p" | cut -d'|' -f1)"
+                        case " $modules " in
+                            *" $name "*) ;;
+                            *) modules="${modules:+$modules }$name" ;;
+                        esac
+                    elif [ "$w" -eq "$play" ]; then
+                        if [ -e "$PLAY_API" ]; then
+                            sdrplay=1
+                        else
+                            echo "SDRplay needs the SDRplay API ($PLAY_API): install it from" >/dev/tty
+                            echo "https://www.sdrplay.com/api/ first (see DOC.md, SDRplay on Linux)" >/dev/tty
+                            ok=0
+                        fi
+                    else
+                        ok=0
+                    fi
+                    ;;
+            esac
+        done
+        [ "$ok" -eq 0 ] || break
+        echo "answer with numbers from 1 to $play separated by spaces, none, or Enter" >/dev/tty
+    done
 }
 
 # The latest release tag (vX.Y.Z), through git or, without git, the GitHub API.
@@ -68,11 +155,21 @@ main() {
     user="$(id -un)"
     group="$(id -gn)"
 
+    choose_modules
+    echo
+
     missing=""
     for p in $PACKAGES; do
-        dpkg-query -W -f='${Status}' "$p" 2>/dev/null | grep -q 'install ok installed' ||
-            missing="$missing $p"
+        installed_pkg "$p" || missing="$missing $p"
     done
+    new_modules=""
+    for m in $modules; do
+        installed_module "$m" || new_modules="$new_modules soapysdr-module-$m"
+    done
+    missing="$missing$new_modules"
+    if [ "$sdrplay" -eq 1 ]; then
+        installed_pkg cmake || missing="$missing cmake"
+    fi
     missing="${missing# }"
 
     rust=1
@@ -109,6 +206,17 @@ main() {
         fi
     fi
 
+    play_state=new
+    chown_play=0
+    if [ "$sdrplay" -eq 1 ] && [ -e "$PLAY_SRC" ]; then
+        if [ -d "$PLAY_SRC/.git" ] && grep -qsE "url = (https://github\.com/|git@github\.com:)pothosware/SoapySDRPlay3(\.git)?/?\$" "$PLAY_SRC/.git/config"; then
+            play_state=update
+            [ "$(stat -c %U "$PLAY_SRC")" = "$user" ] || chown_play=1
+        else
+            die "$PLAY_SRC exists and is not a clone of $PLAY_REPO: move it away and run the installer again"
+        fi
+    fi
+
     service_state=none
     if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
         service_state=absent
@@ -130,6 +238,20 @@ main() {
         echo "  - install system packages (sudo apt-get install): $missing"
     else
         echo "  - system packages: all present"
+    fi
+    if [ -n "$modules" ]; then
+        echo "  - SoapySDR modules: $modules${new_modules:+ (apt:$new_modules)}"
+    else
+        echo "  - SoapySDR modules from apt: none chosen"
+    fi
+    if [ "$sdrplay" -eq 1 ]; then
+        if [ "$play_state" = new ]; then
+            echo "  - clone SoapySDRPlay3 into $PLAY_SRC (created with sudo, owned by $user),"
+        else
+            echo "  - update SoapySDRPlay3 in $PLAY_SRC (local changes in it are discarded),"
+        fi
+        [ "$chown_play" -eq 0 ] || echo "    give it to $user (sudo chown -R; now owned by $(stat -c %U "$PLAY_SRC")),"
+        echo "    build the SDRplay module and install it to $(dirname "$PLAY_MODULE") (sudo)"
     fi
     if [ "$rust" -eq 1 ]; then
         echo "  - install Rust with rustup into $HOME/.cargo (minimal profile; rustup adds"
@@ -174,6 +296,28 @@ main() {
         *) [ ! -d "$HOME/.cargo/bin" ] || PATH="$HOME/.cargo/bin:$PATH" ;;
     esac
     export PATH
+
+    # SDRplay module.
+    if [ "$sdrplay" -eq 1 ]; then
+        if [ "$play_state" = new ]; then
+            sudo mkdir -p "$PLAY_SRC"
+            sudo chown "$user:$group" "$PLAY_SRC"
+            git clone "$PLAY_REPO" "$PLAY_SRC"
+        elif [ "$chown_play" -eq 1 ]; then
+            sudo chown -R "$user:$group" "$PLAY_SRC"
+        fi
+        git -C "$PLAY_SRC" fetch --force origin
+        git -C "$PLAY_SRC" remote set-head origin --auto >/dev/null
+        git -C "$PLAY_SRC" checkout --quiet --force --detach origin/HEAD
+        git -C "$PLAY_SRC" clean -fdxq
+        cmake -S "$PLAY_SRC" -B "$PLAY_SRC/build"
+        cmake --build "$PLAY_SRC/build" -j "$(nproc)"
+        sudo cmake --install "$PLAY_SRC/build"
+        sudo ldconfig
+        # sudo: the install leaves a root-owned install_manifest.txt in it.
+        sudo rm -rf "$PLAY_SRC/build"
+        echo "installed the SDRplay module $PLAY_MODULE ($(git -C "$PLAY_SRC" describe --tags --always))"
+    fi
 
     # Sources.
     if [ "$src_state" = new ]; then
