@@ -205,10 +205,13 @@ fn overlap_fix(a: &SessionRange, b: &SessionRange) -> String {
     };
     if let Some((inner, outer)) = contained {
         let (i, o) = (&inner.spec, &outer.spec);
-        let low =
-            last_below(o, i.start).map(|f| format!("{}-{}", format_mhz(o.start), format_mhz(f)));
-        let high =
-            first_above(o, i.stop).map(|f| format!("{}-{}", format_mhz(f), format_mhz(o.stop)));
+        // A piece of a single channel is not offered: a range needs a start below its stop.
+        let low = last_below(o, i.start)
+            .filter(|&f| f > o.start)
+            .map(|f| format!("{}-{}", format_mhz(o.start), format_mhz(f)));
+        let high = first_above(o, i.stop)
+            .filter(|&f| f < o.stop)
+            .map(|f| format!("{}-{}", format_mhz(f), format_mhz(o.stop)));
         let split = match (low, high) {
             (Some(l), Some(h)) => format!(", or split {} into {l} and {h}", span(o)),
             (Some(p), None) | (None, Some(p)) => format!(", or change {} to {p}", span(o)),
@@ -224,10 +227,10 @@ fn overlap_fix(a: &SessionRange, b: &SessionRange) -> String {
     let (early, late) = if x.start <= y.start { (a, b) } else { (b, a) };
     let (e, l) = (&early.spec, &late.spec);
     let mut fixes = Vec::new();
-    if let Some(f) = first_above(l, e.stop) {
+    if let Some(f) = first_above(l, e.stop).filter(|&f| f < l.stop) {
         fixes.push(format!("start {} at {} MHz", span(l), format_mhz(f)));
     }
-    if let Some(f) = last_below(e, l.start) {
+    if let Some(f) = last_below(e, l.start).filter(|&f| f > e.start) {
         fixes.push(format!("end {} at {} MHz", span(e), format_mhz(f)));
     }
     format!(
@@ -680,6 +683,34 @@ mod tests {
             e.contains("lies inside") && e.contains("or change 430.000-440.000 to 431.025-440.000"),
             "{e}"
         );
+        // A single channel left over is not a range: no piece of one channel is offered.
+        let one_left = [
+            session(430_000_000, 431_000_000, 12_500, RangeSource::CommandLine),
+            session(430_000_000, 430_987_500, 12_500, RangeSource::File(1)),
+        ];
+        let e = check_overlaps(&one_left).unwrap_err();
+        assert!(e.ends_with("remove 430.000-430.9875"), "{e}");
+        let both_ends = [
+            session(430_000_000, 431_000_000, 12_500, RangeSource::CommandLine),
+            session(430_012_500, 430_987_500, 12_500, RangeSource::File(1)),
+        ];
+        let e = check_overlaps(&both_ends).unwrap_err();
+        assert!(e.ends_with("remove 430.0125-430.9875"), "{e}");
+        let short_late = [
+            session(430_000_000, 431_000_000, 12_500, RangeSource::CommandLine),
+            session(431_000_000, 431_012_500, 12_500, RangeSource::File(1)),
+        ];
+        let e = check_overlaps(&short_late).unwrap_err();
+        assert!(
+            e.ends_with("overlap: end 430.000-431.000 at 430.9875 MHz"),
+            "{e}"
+        );
+        let both_short = [
+            session(430_000_000, 430_012_500, 12_500, RangeSource::CommandLine),
+            session(430_012_500, 430_025_000, 12_500, RangeSource::File(1)),
+        ];
+        let e = check_overlaps(&both_short).unwrap_err();
+        assert!(e.ends_with("overlap: remove one of them"), "{e}");
     }
 
     #[test]
