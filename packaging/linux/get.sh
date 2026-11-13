@@ -2,9 +2,10 @@
 # One-line install of rfscan on Linux with apt (Debian, Ubuntu, Raspberry Pi OS):
 #
 #   curl -fsSL https://raw.githubusercontent.com/b4sh/rfscan/main/packaging/linux/get.sh | sh
-#   ... | sh -s -- --main      the development version (main) instead of the latest release
+#   ... | sh -s -- --main      the development version (main) without asking
 #
-# It first prints what it will install and waits for a confirmation; nothing is changed before.
+# It first asks whether to install the latest release or the development version, prints what
+# it will install and waits for a confirmation; nothing is changed before.
 # Before that it asks which SoapySDR modules (receiver drivers) to install; SDRplay is built from
 # source when the SDRplay API is installed. Then it installs the missing build packages and the
 # modules (apt) and Rust (rustup, into ~/.cargo), keeps the sources in /usr/local/src/rfscan
@@ -123,6 +124,33 @@ choose_modules() {
     done
 }
 
+# The short commit of main, through git or, without git, the GitHub API.
+main_commit() {
+    if command -v git >/dev/null 2>&1; then
+        git ls-remote "$REPO" refs/heads/main | cut -c1-7
+    else
+        curl -fsSL "$API/commits/main" | sed -n 's/^  "sha": *"\([0-9a-f]\{7\}\).*/\1/p' | head -n 1
+    fi
+}
+
+# Asks whether to install the latest release (tag) or the development version (sets use_main).
+choose_version() {
+    commit="$(main_commit)" || commit=""
+    echo "Version to install:"
+    echo "  1) $tag (the latest release) [default]"
+    echo "  2) the development version (main${commit:+, $commit}): the newest changes, may be unfinished"
+    while :; do
+        printf 'Version (1 or 2, Enter: 1): ' >/dev/tty
+        answer=""
+        read -r answer </dev/tty || answer=""
+        case "$answer" in
+            "" | 1) return ;;
+            2) use_main=1; return ;;
+            *) echo "answer 1, 2 or Enter" >/dev/tty ;;
+        esac
+    done
+}
+
 # The latest release tag (vX.Y.Z), through git or, without git, the GitHub API.
 latest_tag() {
     if command -v git >/dev/null 2>&1; then
@@ -139,7 +167,7 @@ main() {
         case "$arg" in
             --main) use_main=1 ;;
             -h | --help)
-                echo "usage: get.sh [--main]   (--main: the development version instead of the latest release)"
+                echo "usage: get.sh [--main]   (--main: the development version, without asking)"
                 exit 0
                 ;;
             *) die "unknown option: $arg (only --main)" ;;
@@ -156,6 +184,12 @@ main() {
     user="$(id -un)"
     group="$(id -gn)"
 
+    if [ "$use_main" -eq 0 ]; then
+        tag="$(latest_tag)" || tag=""
+        [ -n "$tag" ] || die "cannot find the latest release of $REPO (no network?)"
+        choose_version
+        echo
+    fi
     choose_modules
     echo
 
@@ -182,8 +216,6 @@ main() {
         ref=origin/main
         target_name="the development version (main)"
     else
-        tag="$(latest_tag)" || tag=""
-        [ -n "$tag" ] || die "cannot find the latest release of $REPO (no network?)"
         ref="$tag"
         target_name="$tag"
     fi
