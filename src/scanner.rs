@@ -45,6 +45,7 @@ use crate::events::{
 use crate::exclusions::Exclusions;
 use crate::log::{Level, Log};
 use crate::plan::{Modulation, ScanPlan};
+use crate::scan_list::SharedScanList;
 use crate::{logev, logwarn};
 
 const READ_TIMEOUT_US: i64 = 100_000;
@@ -261,6 +262,9 @@ pub struct ExclusionCtl {
     pub path: PathBuf,
     /// Channels masked like exclusions for another reason (`digi` without `--digi-tcp`).
     pub masked: Vec<bool>,
+    /// Channels of items switched off in the scan list. Kept apart from the exclusions and
+    /// `masked`, so switching an item on never unmasks a channel masked for those reasons.
+    off: Vec<bool>,
     /// `X`: number of adjacent channels excluded on each side (`--exclude-wide`).
     pub wide: u64,
     /// The file entries with their notes, shared with the UI (exclusions screen).
@@ -283,6 +287,7 @@ impl ExclusionCtl {
             list,
             path,
             masked,
+            off: Vec::new(),
             wide,
             mask: Vec::new(),
             added: Vec::new(),
@@ -296,10 +301,19 @@ impl ExclusionCtl {
         self.mask.iter().filter(|&&m| m).count()
     }
 
+    /// Sets the channels switched off in the scan list and rebuilds the mask.
+    pub fn set_off(&mut self, plan: &ScanPlan, off: Vec<bool>) {
+        self.off = off;
+        self.rebuild(plan);
+    }
+
     /// Rebuilds the mask after a change (only on user action, not in the hot loop).
     fn rebuild(&mut self, plan: &ScanPlan) {
         self.mask = self.list.mask(plan);
         for (m, &d) in self.mask.iter_mut().zip(&self.masked) {
+            *m |= d;
+        }
+        for (m, &d) in self.mask.iter_mut().zip(&self.off) {
             *m |= d;
         }
         if let Ok(mut s) = self.shared.lock() {
@@ -412,6 +426,60 @@ pub struct Session<'a> {
     pub ui: Option<UiLink>,
     /// Audio recording (`--record-dir`): told where each activity begins and ends.
     pub recorder: Option<&'a crate::recorder::Link>,
+    /// The scan list: items switched on and off (and ranges named) from the interfaces.
+    pub scan_list: &'a SharedScanList,
+}
+
+/// Per window in scan order: whether it has a measured channel switched on, and the bandwidth
+/// of its measured channels switched on (for the scan speed). A window without one is skipped
+/// without retuning. Computed at the start and on user action only.
+fn window_state(
+    plan: &ScanPlan,
+    windows: &[&crate::plan::Window],
+    off: &[bool],
+) -> (Vec<bool>, Vec<f64>) {
+    windows
+        .iter()
+        .map(|w| {
+            let on: Vec<u64> = (w.first_index..w.first_index + w.channels)
+                .filter(|&i| w.is_measured(i) && !off.get(i as usize).copied().unwrap_or(false))
+                .collect();
+            let hz = on
+                .iter()
+                .map(|&i| plan.channels[i as usize].spacing)
+                .sum::<f64>();
+            (!on.is_empty(), hz)
+        })
+        .unzip()
+}
+
+/// The next window after `pos` that has a channel switched on (one step when none has),
+/// counting the finished cycles.
+fn next_window(pos: usize, on: &[bool], cycles: &mut u64) -> usize {
+    let len = on.len();
+    let next = (1..=len)
+        .map(|k| (pos + k) % len)
+        .find(|&p| on[p])
+        .unwrap_or((pos + 1) % len);
+    // Steps forward (1..=len): passing the last window ends a cycle.
+    let steps = (next + len - pos - 1) % len + 1;
+    if pos + steps >= len {
+        *cycles += 1;
+    }
+    next
+}
+
+/// `144.000-146.000 MHz "2m"` or `145.500 MHz`: an item of the scan list for the log.
+fn item_label(item: &crate::scan_list::ScanItem) -> String {
+    let what = if item.start == item.stop {
+        format!("{} MHz", format_mhz(item.start))
+    } else {
+        format!("{}-{} MHz", format_mhz(item.start), format_mhz(item.stop))
+    };
+    match &item.name {
+        Some(n) => format!("{what} \"{n}\""),
+        None => what,
+    }
 }
 
 /// Live view of a lock for the UI.
@@ -508,6 +576,7 @@ pub fn run(
         exclusions,
         ui,
         recorder,
+        scan_list,
     } = session;
     // The entry threshold can change live from the UI.
     let mut cfg = cfg.clone();
@@ -520,20 +589,35 @@ pub fn run(
     let mut buf = IqBuffer::new(format, src.buffer_len());
     let mut iq = vec![Complex::new(0.0f32, 0.0); detector.samples_needed()];
     let mut counters = StreamCounters::default();
-    // Windows in scan order with a name (pass, window number), e.g. A0, B3, and the bandwidth of
-    // the measured channels (for the scan speed), computed once at startup.
-    let windows: Vec<(char, usize, &crate::plan::Window, f64)> = plan
+    // Windows in scan order with a name (pass, window number), e.g. A0, B3.
+    let windows: Vec<(char, usize, &crate::plan::Window)> = plan
         .passes
         .iter()
         .enumerate()
         .flat_map(|(p, pass)| {
             let name = if p == 0 { 'A' } else { 'B' };
-            pass.iter()
-                .enumerate()
-                .map(move |(i, w)| (name, i, w, plan.measured_hz(w)))
+            pass.iter().enumerate().map(move |(i, w)| (name, i, w))
         })
         .collect();
     anyhow::ensure!(!windows.is_empty(), "the plan contains no windows");
+    let plain: Vec<&crate::plan::Window> = windows.iter().map(|&(_, _, w)| w).collect();
+    // The scan list: the channels switched off are masked, the windows without a channel
+    // switched on are skipped, and the scan speed counts only the channels switched on.
+    let off = scan_list.lock().map_or_else(
+        |_| vec![false; plan.channels.len()],
+        |l| l.off_mask(plan.channels.len()),
+    );
+    let (mut window_on, mut window_hz) = window_state(plan, &plain, &off);
+    exclusions.set_off(plan, off);
+    let mut any_on = window_on.iter().any(|&o| o);
+    if !any_on {
+        logev!(
+            log,
+            Level::Info,
+            Instant::now(),
+            "IDLE      nothing to scan: every item of the scan list is switched off (switch one on in the web GUI or the TUI)"
+        );
+    }
 
     src.start()?;
     let start = Instant::now();
@@ -589,6 +673,70 @@ pub fn run(
                         "{}",
                         if paused { "PAUSED" } else { "RESUMED" }
                     );
+                }
+                Command::SetScan { items, on } => {
+                    let result = scan_list
+                        .lock()
+                        .map_err(|_| "the scan list is not available".to_string())
+                        .and_then(|mut l| {
+                            let changed = l.switch(&items, on);
+                            l.error = changed.as_ref().err().cloned();
+                            changed.map(|c| {
+                                let labels: Vec<String> =
+                                    c.iter().map(|&i| item_label(&l.items[i])).collect();
+                                (labels, l.off_mask(plan.channels.len()))
+                            })
+                        });
+                    match result {
+                        Ok((labels, off)) if !labels.is_empty() => {
+                            let what = if labels.len() <= 3 {
+                                labels.join(", ")
+                            } else {
+                                format!("{} items", labels.len())
+                            };
+                            logev!(
+                                log,
+                                Level::Info,
+                                now,
+                                "SCAN {}  {what}",
+                                if on { "ON " } else { "OFF" }
+                            );
+                            (window_on, window_hz) = window_state(plan, &plain, &off);
+                            exclusions.set_off(plan, off);
+                            let was = any_on;
+                            any_on = window_on.iter().any(|&o| o);
+                            if was && !any_on {
+                                logev!(
+                                    log,
+                                    Level::Info,
+                                    now,
+                                    "IDLE      nothing to scan: every item of the scan list is switched off"
+                                );
+                            } else if !was && any_on {
+                                logev!(log, Level::Info, now, "SCANNING  resumed");
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(e) => logwarn!(log, "WARNING: scan list: {e}"),
+                    }
+                    send(UiEvent::ScanListChanged);
+                    // The current channel is switched off: leave it like an excluded one.
+                    leave = current.is_some_and(|l| exclusions.off.get(l.channel) == Some(&true));
+                }
+                Command::NameRange { item, name } => {
+                    let result = scan_list
+                        .lock()
+                        .map_err(|_| "the scan list is not available".to_string())
+                        .and_then(|mut l| {
+                            let r = l.rename(item, name.clone());
+                            l.error = r.as_ref().err().cloned();
+                            r.map(|()| item_label(&l.items[item]))
+                        });
+                    match result {
+                        Ok(label) => logev!(log, Level::Info, now, "NAMED     {label}"),
+                        Err(e) => logwarn!(log, "WARNING: scan list: {e}"),
+                    }
+                    send(UiEvent::ScanListChanged);
                 }
                 Command::RecordingDeleted(path) => {
                     logev!(log, Level::Info, now, "REC DEL   {}", path.display());
@@ -772,10 +920,7 @@ pub fn run(
                 }
                 send(UiEvent::History(history_item(&l, end)));
                 send(UiEvent::Unlock);
-                pos = (l.window + 1) % windows.len();
-                if pos == 0 {
-                    cycles += 1;
-                }
+                pos = next_window(l.window, &window_on, &mut cycles);
                 state = State::Scanning;
             }
         }
@@ -796,14 +941,20 @@ pub fn run(
         }
 
         state = match state {
-            // Paused while scanning: keep reading the stream, do not move or measure.
-            State::Scanning if paused => {
+            // Paused while scanning, or nothing switched on: keep reading the stream (the samples
+            // are discarded), do not retune or measure.
+            State::Scanning if paused || !any_on => {
                 read_iq(src, &mut buf, full_scale, &mut iq, &mut counters)?;
                 State::Scanning
             }
             State::Scanning => {
                 let t0 = Instant::now();
-                let (_, _, w, w_hz) = windows[pos];
+                // A window without a channel switched on is skipped without retuning.
+                if !window_on[pos] {
+                    pos = next_window(pos, &window_on, &mut cycles);
+                }
+                let (_, _, w) = windows[pos];
+                let w_hz = window_hz[pos];
                 src.tune(w.center as f64)?;
                 consume(src, &mut buf, cfg.settle_samples, &mut counters)?;
                 read_iq(src, &mut buf, full_scale, &mut iq, &mut counters)?;
@@ -897,7 +1048,7 @@ pub fn run(
                             }
                         };
                         let now = Instant::now();
-                        let (name, i, _, _) = windows[pos];
+                        let (name, i, _) = windows[pos];
                         match confirmed {
                             Confirm::Yes {
                                 lo,
@@ -972,19 +1123,13 @@ pub fn run(
                                     power_db - floor_db,
                                     format_mhz(lo),
                                 );
-                                pos = (pos + 1) % windows.len();
-                                if pos == 0 {
-                                    cycles += 1;
-                                }
+                                pos = next_window(pos, &window_on, &mut cycles);
                                 State::Scanning
                             }
                         }
                     }
                     None => {
-                        pos = (pos + 1) % windows.len();
-                        if pos == 0 {
-                            cycles += 1;
-                        }
+                        pos = next_window(pos, &window_on, &mut cycles);
                         State::Scanning
                     }
                 };
@@ -1113,11 +1258,8 @@ pub fn run(
                     }
                     send(UiEvent::History(history_item(&lock, since)));
                     send(UiEvent::Unlock);
-                    pos = (lock.window + 1) % windows.len();
-                    if pos == 0 {
-                        cycles += 1;
-                    }
-                    let (name, i, _, _) = windows[pos];
+                    pos = next_window(lock.window, &window_on, &mut cycles);
+                    let (name, i, _) = windows[pos];
                     logev!(
                         log,
                         Level::Debug,
@@ -1148,6 +1290,7 @@ pub fn run(
             send(UiEvent::Status(Status {
                 state: match state {
                     _ if paused => ScanState::Paused,
+                    State::Scanning if !any_on => ScanState::Idle,
                     State::Scanning => ScanState::Scanning,
                     State::Locked(_) => ScanState::Locked,
                     State::Hang(..) => ScanState::Hang,
@@ -1417,5 +1560,450 @@ mod tests {
         let powers = [-70.0, -40.0];
         assert!(is_local_max(&powers, &freqs, 0, 8_333.3));
         assert!(is_local_max(&powers, &freqs, 1, 12_500.0));
+    }
+}
+
+/// The scan list in the scan loop, with a simulated receiver.
+#[cfg(test)]
+mod scan_list_tests {
+    use super::*;
+    use crate::device::SampleFormat;
+    use crate::plan::{RangeSpec, Step};
+    use crate::scan_list::{RangeSource, ScanList, SessionRange};
+
+    const RATE: f64 = 2_000_000.0;
+    const USABLE: u64 = 1_600_000;
+
+    /// A receiver with noise and constant carriers; it records every retune.
+    struct Mock {
+        lo: f64,
+        n: u64,
+        seed: u32,
+        /// Carriers: frequency (Hz) and amplitude.
+        tx: Vec<(f64, f32)>,
+        tunes: Arc<Mutex<Vec<u64>>>,
+    }
+
+    impl Mock {
+        fn new(tx: Vec<(f64, f32)>) -> (Self, Arc<Mutex<Vec<u64>>>) {
+            let tunes = Arc::new(Mutex::new(Vec::new()));
+            let m = Mock {
+                lo: 0.0,
+                n: 0,
+                seed: 1,
+                tx,
+                tunes: tunes.clone(),
+            };
+            (m, tunes)
+        }
+
+        fn noise(&mut self) -> f32 {
+            self.seed = self
+                .seed
+                .wrapping_mul(1_664_525)
+                .wrapping_add(1_013_904_223);
+            ((self.seed >> 8) as f32 / (1u32 << 24) as f32 - 0.5) * 2e-3
+        }
+    }
+
+    impl SdrSource for Mock {
+        fn sample_rates(&self) -> &[f64] {
+            &[RATE]
+        }
+        fn set_sample_rate(&mut self, hz: f64) -> Result<f64, SdrError> {
+            Ok(hz)
+        }
+        fn set_frequency(&mut self, hz: f64) -> Result<f64, SdrError> {
+            self.lo = hz;
+            Ok(hz)
+        }
+        fn tune(&mut self, hz: f64) -> Result<(), SdrError> {
+            self.lo = hz;
+            if let Ok(mut t) = self.tunes.lock() {
+                t.push(hz.round() as u64);
+            }
+            Ok(())
+        }
+        fn configure(&mut self, _: &[(String, String)]) -> Result<(), SdrError> {
+            Ok(())
+        }
+        fn set_frequency_correction(&mut self, ppm: f64) -> Result<f64, SdrError> {
+            Ok(ppm)
+        }
+        fn config_summary(&self) -> String {
+            "mock".into()
+        }
+        fn stream_format(&self) -> (SampleFormat, f64) {
+            (SampleFormat::Cf32, 1.0)
+        }
+        fn buffer_len(&self) -> usize {
+            4096
+        }
+        fn start(&mut self) -> Result<(), SdrError> {
+            Ok(())
+        }
+        fn read(
+            &mut self,
+            buf: &mut IqBuffer,
+            max: usize,
+            _timeout_us: i64,
+        ) -> Result<ReadOutcome, SdrError> {
+            let IqBuffer::Cf32(b) = buf else {
+                return Ok(ReadOutcome::Timeout);
+            };
+            let n = max.min(b.len());
+            for s in b.iter_mut().take(n) {
+                let t = self.n as f64 / RATE;
+                let mut x = Complex::new(self.noise(), self.noise());
+                for &(f, a) in self
+                    .tx
+                    .iter()
+                    .filter(|(f, _)| (f - self.lo).abs() < RATE / 2.0)
+                {
+                    let ph = (std::f64::consts::TAU * (f - self.lo) * t)
+                        .rem_euclid(std::f64::consts::TAU);
+                    x += Complex::from_polar(a, ph as f32);
+                }
+                *s = x;
+                self.n += 1;
+            }
+            Ok(ReadOutcome::Samples(n))
+        }
+    }
+
+    fn range(start: u64, stop: u64) -> SessionRange {
+        SessionRange {
+            spec: RangeSpec {
+                start,
+                stop,
+                step: Step::from_hz(12_500),
+                bw: 12_500.0,
+                bw_explicit: false,
+                mode: Modulation::Nfm,
+            },
+            name: None,
+            off: false,
+            line: None,
+            source: RangeSource::CommandLine,
+        }
+    }
+
+    /// Two ranges with two passes each (DC zone of one channel).
+    fn session() -> (Vec<SessionRange>, ScanPlan) {
+        let ranges = vec![
+            range(144_000_000, 145_000_000),
+            range(430_000_000, 431_000_000),
+        ];
+        let specs: Vec<RangeSpec> = ranges.iter().map(|r| r.spec).collect();
+        let plan = crate::plan::ranges_plan(&specs, USABLE, 1).unwrap();
+        assert_eq!(plan.passes.len(), 2);
+        (ranges, plan)
+    }
+
+    /// Window centers of one range (both passes).
+    fn centers(plan: &ScanPlan, range: usize) -> Vec<u64> {
+        plan.passes
+            .iter()
+            .flatten()
+            .filter(|w| plan.channels[w.first_index as usize].range == range)
+            .map(|w| w.center)
+            .collect()
+    }
+
+    struct Run {
+        events: Receiver<UiEvent>,
+        commands: Sender<Command>,
+        stop: Arc<AtomicBool>,
+    }
+
+    /// Runs the scanner in a thread until `drive` returns (or 5 s pass), then stops it.
+    fn run_scanner(
+        plan: &ScanPlan,
+        list: ScanList,
+        mock: Mock,
+        tag: &str,
+        drive: impl FnOnce(&Run, &crate::scan_list::SharedScanList),
+    ) {
+        let list = Arc::new(Mutex::new(list));
+        let dir = std::env::temp_dir().join(format!("rfscan-scan-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (excl, _) = Exclusions::load(&dir.join("exclude.txt")).unwrap();
+        let mut exclusions = ExclusionCtl::new(
+            excl,
+            dir.join("exclude.txt"),
+            vec![false; plan.channels.len()],
+            2,
+            plan,
+        );
+        let cfg = crate::detector::DetectorConfig {
+            fft_size: 1024,
+            frames: 1,
+            dc_mask: 1,
+            sample_rate: RATE,
+            usable_hz: USABLE as f64,
+        };
+        let mut det = Detector::new(plan, &cfg).unwrap();
+        let scan_cfg = ScanConfig {
+            settle_samples: 0,
+            squelch_snr: 10.0,
+            squelch_abs: None,
+            hysteresis: 3.0,
+            pause: Duration::from_millis(50),
+            digi_hold: Duration::from_millis(120),
+            duration: Some(Duration::from_secs(5)),
+            confirm: false,
+            confirm_blocks: 1,
+            usable_hz: USABLE as f64,
+        };
+        let activity = Mutex::new(ActivityLog::default());
+        let activity_path = dir.join("activity.txt");
+        let (ev_tx, ev_rx) = crossbeam_channel::bounded(100_000);
+        let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+        let stop = Arc::new(AtomicBool::new(false));
+        let link = Run {
+            events: ev_rx,
+            commands: cmd_tx,
+            stop: stop.clone(),
+        };
+        std::thread::scope(|s| {
+            let scanner = s.spawn(|| {
+                let mut mock = mock;
+                let mut log = Log::console();
+                log.set_console(false);
+                run(
+                    &mut mock,
+                    plan,
+                    &mut det,
+                    &scan_cfg,
+                    Session {
+                        audio: None,
+                        activity: &activity,
+                        activity_path: &activity_path,
+                        stop: &stop,
+                        digi: None,
+                        exclusions: &mut exclusions,
+                        ui: Some(UiLink {
+                            events: ev_tx,
+                            commands: cmd_rx,
+                        }),
+                        recorder: None,
+                        scan_list: &list,
+                    },
+                    &mut log,
+                )
+            });
+            drive(&link, &list);
+            link.stop.store(true, Ordering::Relaxed);
+            assert!(scanner.join().unwrap().is_ok());
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Waits for an event matching `want` (at most 3 s).
+    fn wait_for(run: &Run, want: impl Fn(&UiEvent) -> bool) -> UiEvent {
+        let end = Instant::now() + Duration::from_secs(3);
+        loop {
+            let left = end.saturating_duration_since(Instant::now());
+            match run.events.recv_timeout(left) {
+                Ok(e) if want(&e) => return e,
+                Ok(_) => {}
+                Err(_) => panic!("event not received"),
+            }
+        }
+    }
+
+    fn status_is(e: &UiEvent, state: ScanState) -> bool {
+        matches!(e, UiEvent::Status(s) if s.state == state)
+    }
+
+    /// A range switched off is never tuned, in either pass; the other one is, in both passes.
+    #[test]
+    fn disabled_windows_are_skipped_in_both_passes() {
+        let (mut ranges, plan) = session();
+        ranges[1].off = true;
+        let list = ScanList::ranges(&ranges, &plan, None);
+        let (mock, tunes) = Mock::new(Vec::new());
+        run_scanner(&plan, list, mock, "skip", |run, _| {
+            // A few cycles.
+            wait_for(run, |e| matches!(e, UiEvent::Status(s) if s.cycles >= 3));
+        });
+        let tunes = tunes.lock().unwrap();
+        let (on, off) = (centers(&plan, 0), centers(&plan, 1));
+        assert!(
+            tunes.iter().all(|t| on.contains(t)),
+            "a disabled window was tuned"
+        );
+        assert!(
+            on.iter().all(|c| tunes.contains(c)),
+            "a window of an enabled range was not tuned"
+        );
+        assert!(!tunes.iter().any(|t| off.contains(t)));
+    }
+
+    /// Everything switched off at the start: idle, no retune, commands handled; switching a range
+    /// on resumes scanning.
+    #[test]
+    fn all_off_waits_and_resumes() {
+        let (mut ranges, plan) = session();
+        ranges[0].off = true;
+        ranges[1].off = true;
+        let list = ScanList::ranges(&ranges, &plan, None);
+        let (mock, tunes) = Mock::new(Vec::new());
+        run_scanner(&plan, list, mock, "idle", |run, list| {
+            wait_for(run, |e| status_is(e, ScanState::Idle));
+            std::thread::sleep(Duration::from_millis(300));
+            assert!(tunes.lock().unwrap().is_empty(), "retuned while idle");
+            // Commands are handled while idle.
+            run.commands.send(Command::Squelch(2.0)).unwrap();
+            wait_for(
+                run,
+                |e| matches!(e, UiEvent::Status(s) if s.state == ScanState::Idle && s.squelch_snr == 12.0),
+            );
+            run.commands
+                .send(Command::SetScan {
+                    items: vec![1],
+                    on: true,
+                })
+                .unwrap();
+            wait_for(run, |e| matches!(e, UiEvent::ScanListChanged));
+            assert_eq!(list.lock().unwrap().counts(), (1, 2));
+            wait_for(
+                run,
+                |e| matches!(e, UiEvent::Status(s) if s.state == ScanState::Scanning && s.cycles >= 2),
+            );
+            // And off again: idle without retuning.
+            run.commands
+                .send(Command::SetScan {
+                    items: vec![1],
+                    on: false,
+                })
+                .unwrap();
+            wait_for(run, |e| status_is(e, ScanState::Idle));
+            let n = tunes.lock().unwrap().len();
+            std::thread::sleep(Duration::from_millis(300));
+            assert_eq!(tunes.lock().unwrap().len(), n, "retuned while idle");
+        });
+        let tunes = tunes.lock().unwrap();
+        let on = centers(&plan, 1);
+        assert!(!tunes.is_empty() && tunes.iter().all(|t| on.contains(t)));
+    }
+
+    /// Switching off the range the scanner is stopped on leaves the channel at once; the scanner
+    /// does not come back to it.
+    #[test]
+    fn switching_off_the_current_range_leaves_it() {
+        let (ranges, plan) = session();
+        let list = ScanList::ranges(&ranges, &plan, None);
+        let (mock, tunes) = Mock::new(vec![(144_300_000.0, 0.05)]);
+        run_scanner(&plan, list, mock, "leave", |run, _| {
+            wait_for(
+                run,
+                |e| matches!(e, UiEvent::Lock(l) if l.freq == 144_300_000),
+            );
+            run.commands
+                .send(Command::SetScan {
+                    items: vec![0],
+                    on: false,
+                })
+                .unwrap();
+            wait_for(run, |e| matches!(e, UiEvent::Unlock));
+            let n = tunes.lock().unwrap().len();
+            // Some cycles over the other range: no lock on the switched off one.
+            let end = Instant::now() + Duration::from_millis(400);
+            while Instant::now() < end {
+                if let Ok(UiEvent::Lock(l)) = run.events.recv_timeout(Duration::from_millis(10)) {
+                    panic!("locked on {} after it was switched off", l.freq);
+                }
+            }
+            let tunes = tunes.lock().unwrap();
+            let on = centers(&plan, 1);
+            assert!(tunes.len() > n && tunes[n..].iter().all(|t| on.contains(t)));
+        });
+    }
+
+    /// The window state: a window is skipped only when none of its measured channels is on, and
+    /// the scan speed counts only the channels switched on.
+    #[test]
+    fn window_state_and_scan_speed() {
+        let ch = |f| crate::plan::ChannelSpec {
+            freq: f,
+            bw: 12_500.0,
+            mode: Modulation::Nfm,
+            name: None,
+            raster25: false,
+        };
+        let plan = crate::plan::channels_plan(
+            &[ch(145_500_000), ch(145_600_000), ch(145_700_000)],
+            USABLE,
+            1,
+        )
+        .unwrap();
+        let windows: Vec<&crate::plan::Window> = plan.passes.iter().flatten().collect();
+        assert_eq!(windows.len(), 1);
+        let (on, hz) = window_state(&plan, &windows, &[false, true, false]);
+        assert_eq!((on, hz), (vec![true], vec![25_000.0]));
+        let (on, hz) = window_state(&plan, &windows, &[true, true, true]);
+        assert_eq!((on, hz), (vec![false], vec![0.0]));
+        let (on, hz) = window_state(&plan, &windows, &[false; 3]);
+        assert_eq!((on, hz), (vec![true], vec![37_500.0]));
+
+        // Ranges: the windows of a range switched off are not counted.
+        let (ranges, plan) = session();
+        let windows: Vec<&crate::plan::Window> = plan.passes.iter().flatten().collect();
+        let mut list = ScanList::ranges(&ranges, &plan, None);
+        let (_, all) = window_state(&plan, &windows, &list.off_mask(plan.channels.len()));
+        list.switch(&[1], false).unwrap();
+        let (on, half) = window_state(&plan, &windows, &list.off_mask(plan.channels.len()));
+        let sum = |v: &[f64]| v.iter().sum::<f64>();
+        assert!((sum(&half) - sum(&all) / 2.0).abs() < 1.0);
+        for (i, w) in windows.iter().enumerate() {
+            assert_eq!(on[i], plan.channels[w.first_index as usize].range == 0);
+        }
+    }
+
+    /// The next window skips the disabled ones and counts the cycles.
+    #[test]
+    fn next_window_skips_disabled() {
+        let on = [true, false, false, true, false];
+        let mut cycles = 0;
+        assert_eq!(next_window(0, &on, &mut cycles), 3);
+        assert_eq!(next_window(3, &on, &mut cycles), 0);
+        assert_eq!(cycles, 1);
+        // Nothing on: one step.
+        assert_eq!(next_window(1, &[false; 3], &mut cycles), 2);
+    }
+
+    /// The switch mask is independent of the exclusions and of the digi mask, in both orders.
+    #[test]
+    fn switch_mask_is_independent() {
+        let (ranges, plan) = session();
+        let list = ScanList::ranges(&ranges, &plan, None);
+        let n = plan.channels.len();
+        let dir = std::env::temp_dir().join(format!("rfscan-mask-{}", std::process::id()));
+        let (excl, _) = Exclusions::load(&dir.join("x.txt")).unwrap();
+        let mut digi = vec![false; n];
+        digi[3] = true;
+        let mut ctl = ExclusionCtl::new(excl, dir.join("x.txt"), digi, 2, &plan);
+        let excluded = plan.channels[10].freq;
+        let masked = |c: &ExclusionCtl| c.mask.iter().filter(|&&m| m).count();
+
+        // Excluded, then switched off, then on: the exclusion stays.
+        ctl.add(&plan, vec![excluded], None, Some(10)).unwrap();
+        let mut off_list = list.clone();
+        off_list.switch(&[0], false).unwrap();
+        ctl.set_off(&plan, off_list.off_mask(n));
+        assert_eq!(masked(&ctl), 81);
+        ctl.set_off(&plan, list.off_mask(n));
+        assert!(ctl.mask[10] && ctl.mask[3]);
+        assert_eq!(masked(&ctl), 2);
+
+        // Switched off, then the exclusion removed: still off; switched on: only digi is left.
+        ctl.set_off(&plan, off_list.off_mask(n));
+        ctl.remove(&plan, &[excluded]).unwrap();
+        assert!(ctl.mask[10]);
+        assert_eq!(masked(&ctl), 81);
+        ctl.set_off(&plan, list.off_mask(n));
+        assert!(!ctl.mask[10] && ctl.mask[3]);
+        assert_eq!(masked(&ctl), 1);
     }
 }

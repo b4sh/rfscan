@@ -1,13 +1,15 @@
 //! Channel file: frequencies with names, mode and bandwidth.
 //!
-//! Line format: `FREQUENCY_MHz [am|nfm|fm|digi] [rec] [bw=WIDTH] ["name"]`. Mode, `rec` and
-//! `bw=` in any order before the name. `#` outside quotes starts a comment. `\"` and `\\` are allowed in the
-//! name. A line that cannot be parsed produces a warning with the line number. Duplicate
-//! frequency: the first entry wins, the second produces a warning.
+//! Line format: `FREQUENCY_MHz [am|nfm|fm|digi] [rec] [off] [bw=WIDTH] ["name"]`. Mode, `rec`,
+//! `off` and `bw=` in any order before the name. `#` outside quotes starts a comment. `\"` and
+//! `\\` are allowed in the name. A line that cannot be parsed produces a warning with the line
+//! number. Duplicate frequency: the first entry wins, the second produces a warning.
 //!
 //! The program writes the file only when the user names a channel or marks it `digi` in the TUI
-//! (`set_entry`) or switches its audio recording (`set_rec`): the matching entry gets the new
-//! name and mode or `rec` (everything else stays), otherwise a new line is appended. The write is atomic (temporary file + rename) and keeps all other lines unchanged.
+//! (`set_entry`), switches its audio recording (`set_rec`) or switches it on or off in the
+//! channel scan list (`set_off`): the matching entry gets the new name and mode, `rec` or `off`
+//! (everything else stays), otherwise a new line is appended. The write is atomic (temporary
+//! file + rename) and keeps all other lines unchanged.
 
 use std::path::{Path, PathBuf};
 
@@ -25,6 +27,8 @@ pub struct ChannelEntry {
     pub name: Option<String>,
     /// `rec`: the channel's audio is recorded (`--record-dir`).
     pub rec: bool,
+    /// `off`: switched off in the channel scan list (channel mode from the file only).
+    pub off: bool,
     /// Airband: the entry is written with its 25 kHz channel number (25 kHz raster).
     pub raster25: bool,
     /// The frequency as written in the file (kept when the program renames the entry).
@@ -38,7 +42,7 @@ pub fn default_path() -> Option<PathBuf> {
 }
 
 /// Splits a line into words and a quoted name, cutting off a comment outside quotes.
-fn tokenize(line: &str) -> Result<(Vec<&str>, Option<String>), String> {
+pub(crate) fn tokenize(line: &str) -> Result<(Vec<&str>, Option<String>), String> {
     let mut words = Vec::new();
     let mut name = None;
     let mut rest = line;
@@ -109,6 +113,7 @@ fn parse_line(line: &str, number: usize) -> Result<Option<ChannelEntry>, String>
         bw: None,
         name,
         rec: false,
+        off: false,
         raster25,
         freq_text: freq.to_string(),
         line: number,
@@ -124,6 +129,11 @@ fn parse_line(line: &str, number: usize) -> Result<Option<ChannelEntry>, String>
                 return Err("rec given twice".into());
             }
             entry.rec = true;
+        } else if w == "off" {
+            if entry.off {
+                return Err("off given twice".into());
+            }
+            entry.off = true;
         } else if let Some(m) = Modulation::parse(w) {
             if entry.mode.is_some() {
                 return Err("mode given twice".into());
@@ -131,7 +141,7 @@ fn parse_line(line: &str, number: usize) -> Result<Option<ChannelEntry>, String>
             entry.mode = Some(m);
         } else {
             return Err(format!(
-                "'{w}': unknown field (allowed: am, nfm, fm, digi, rec, bw=..., \"name\")"
+                "'{w}': unknown field (allowed: am, nfm, fm, digi, rec, off, bw=..., \"name\")"
             ));
         }
     }
@@ -174,7 +184,7 @@ pub fn nearest(entries: &[ChannelEntry], freq: u64, tolerance: f64) -> Option<&C
 }
 
 /// Splits a line into its content and a comment (`#` outside quotes), if any.
-fn split_comment(line: &str) -> (&str, Option<&str>) {
+pub(crate) fn split_comment(line: &str) -> (&str, Option<&str>) {
     let mut quoted = false;
     let mut escaped = false;
     for (i, c) in line.char_indices() {
@@ -190,7 +200,7 @@ fn split_comment(line: &str) -> (&str, Option<&str>) {
 }
 
 /// A name in quotes, with `"` and `\` escaped.
-fn quoted(name: &str) -> String {
+pub(crate) fn quoted(name: &str) -> String {
     format!("\"{}\"", name.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
@@ -203,6 +213,9 @@ fn entry_line(e: &ChannelEntry, comment: Option<&str>) -> String {
     }
     if e.rec {
         s.push_str(" rec");
+    }
+    if e.off {
+        s.push_str(" off");
     }
     if let Some(bw) = e.bw {
         s.push_str(&format!(" bw={bw}"));
@@ -253,6 +266,13 @@ pub fn set_rec(
     rewrite(path, freq, tolerance, raster25, |e| e.rec = rec)
 }
 
+/// Switches the channels at `freqs` on or off in the channel scan list (`off`) in the file
+/// `path`, as one write: the entry nearest to each frequency within `tolerance` Hz changes only
+/// its `off` mark; a frequency without an entry is appended as a new line.
+pub fn set_off(path: &Path, freqs: &[u64], tolerance: f64, off: bool) -> Result<(), String> {
+    rewrite_many(path, freqs, tolerance, &[], |e| e.off = off).map(|_| ())
+}
+
 /// Changes the entry nearest to `freq` within `tolerance` Hz with `change`, or appends a new
 /// entry changed the same way; all other lines stay. Atomic write (temporary file + rename).
 fn rewrite(
@@ -262,6 +282,23 @@ fn rewrite(
     raster25: bool,
     change: impl Fn(&mut ChannelEntry),
 ) -> Result<u64, String> {
+    let raster: &[u64] = if raster25 { &[freq] } else { &[] };
+    rewrite_many(path, &[freq], tolerance, raster, change)?
+        .first()
+        .copied()
+        .ok_or_else(|| "no channel written".to_string())
+}
+
+/// `rewrite` for several frequencies in one write. A new entry is written as an airband channel
+/// number where it applies (a 25 kHz channel when its frequency is in `raster25`). Returns the
+/// frequency of the entry written for each of `freqs`.
+fn rewrite_many(
+    path: &Path,
+    freqs: &[u64],
+    tolerance: f64,
+    raster25: &[u64],
+    change: impl Fn(&mut ChannelEntry),
+) -> Result<Vec<u64>, String> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -270,57 +307,77 @@ fn rewrite(
         }
     };
     let (entries, _) = parse_file(&text);
-    let target = nearest(&entries, freq, tolerance).cloned();
-    let mut out = String::with_capacity(text.len() + 64);
-    let written = match target {
-        Some(e) => {
-            for (n, line) in text.split_inclusive('\n').enumerate() {
-                if n + 1 == e.line {
-                    let body = line.trim_end_matches(['\n', '\r']);
-                    let ending = &line[body.len()..];
-                    let (_, comment) = split_comment(body.trim_start_matches('\u{feff}'));
-                    if n == 0 && body.starts_with('\u{feff}') {
-                        out.push('\u{feff}');
-                    }
-                    let mut new = e.clone();
-                    change(&mut new);
-                    out.push_str(&entry_line(&new, comment));
-                    out.push_str(if ending.is_empty() { "\n" } else { ending });
-                } else {
-                    out.push_str(line);
+    let mut changed: Vec<&ChannelEntry> = Vec::new();
+    let mut appended: Vec<ChannelEntry> = Vec::new();
+    let mut written = Vec::with_capacity(freqs.len());
+    for &freq in freqs {
+        match nearest(&entries, freq, tolerance) {
+            Some(e) => {
+                if !changed.iter().any(|c| c.line == e.line) {
+                    changed.push(e);
                 }
+                written.push(e.freq);
             }
-            e.freq
-        }
-        None => {
-            out.push_str(&text);
-            if !out.is_empty() && !out.ends_with('\n') {
-                out.push('\n');
+            None => {
+                if !appended.iter().any(|a| a.freq == freq) {
+                    let raster = raster25.contains(&freq);
+                    appended.push(ChannelEntry {
+                        freq,
+                        mode: None,
+                        bw: None,
+                        name: None,
+                        rec: false,
+                        off: false,
+                        raster25: raster,
+                        freq_text: crate::airband::file_text(freq, raster),
+                        line: 0,
+                    });
+                }
+                written.push(freq);
             }
-            let mut e = ChannelEntry {
-                freq,
-                mode: None,
-                bw: None,
-                name: None,
-                rec: false,
-                raster25,
-                freq_text: crate::airband::file_text(freq, raster25),
-                line: 0,
-            };
-            change(&mut e);
-            out.push_str(&entry_line(&e, None));
-            out.push('\n');
-            freq
         }
-    };
-    if let Some(dir) = path.parent() {
+    }
+    let mut out = String::with_capacity(text.len() + 64 * appended.len());
+    for (n, line) in text.split_inclusive('\n').enumerate() {
+        match changed.iter().find(|e| e.line == n + 1) {
+            Some(e) => {
+                let body = line.trim_end_matches(['\n', '\r']);
+                let ending = &line[body.len()..];
+                let (_, comment) = split_comment(body.trim_start_matches('\u{feff}'));
+                if n == 0 && body.starts_with('\u{feff}') {
+                    out.push('\u{feff}');
+                }
+                let mut new = (*e).clone();
+                change(&mut new);
+                out.push_str(&entry_line(&new, comment));
+                out.push_str(if ending.is_empty() { "\n" } else { ending });
+            }
+            None => out.push_str(line),
+        }
+    }
+    if !appended.is_empty() && !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    for mut e in appended {
+        change(&mut e);
+        out.push_str(&entry_line(&e, None));
+        out.push('\n');
+    }
+    write_atomic(path, &out)?;
+    Ok(written)
+}
+
+/// Writes `text` to `path` atomically (temporary file + rename), creating its directory.
+pub(crate) fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
+    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir)
             .map_err(|e| format!("cannot create directory {}: {e}", dir.display()))?;
     }
-    let tmp = path.with_extension("txt.tmp");
-    std::fs::write(&tmp, out).map_err(|e| format!("writing {}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, path).map_err(|e| format!("writing {}: {e}", path.display()))?;
-    Ok(written)
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    std::fs::write(&tmp, text).map_err(|e| format!("writing {}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, path).map_err(|e| format!("writing {}: {e}", path.display()))
 }
 
 /// Loads the channel file. A missing file is an empty list.
@@ -414,6 +471,54 @@ mod tests {
         assert_eq!(e[0].name.as_deref(), Some("DMR \"Repeater\""));
         assert_eq!(e[0].mode, Some(Modulation::Digi));
         assert_eq!(e[1].bw, Some(10_000));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// `off` in any order before the name, kept by naming and by `digi` and `rec`, written and
+    /// removed by a switch as one write.
+    #[test]
+    fn off_mark() {
+        let (e, w) = parse_file(
+            "145.500 off fm \"A\"\n145.600 rec off\n145.700 off off\n145.800 bw=12.5k off am\n",
+        );
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].starts_with("line 3:"));
+        assert!(e[0].off && e[0].mode == Some(Modulation::Nfm));
+        assert!(e[1].off && e[1].rec);
+        assert!(e[2].off && e[2].bw == Some(12_500) && e[2].mode == Some(Modulation::Am));
+
+        let dir = std::env::temp_dir().join(format!("rfscan-cdb-off-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(FILE_NAME);
+        std::fs::write(
+            &path,
+            "\u{feff}# channels\r\n145.500 fm \"A\"  # note\r\nnot a line\r\n145.600 off\r\n",
+        )
+        .unwrap();
+        set_off(&path, &[145_500_000, 145_700_000], 6_250.0, true).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            text,
+            "\u{feff}# channels\r\n145.500 nfm off \"A\"  # note\r\nnot a line\r\n145.600 off\r\n145.700 off\n"
+        );
+        // Naming, digi and rec keep `off`.
+        set_entry(&path, 145_500_000, 4_000.0, Some("B"), true, false).unwrap();
+        set_rec(&path, 145_500_000, 4_000.0, true, false).unwrap();
+        let (e, _) = parse_file(&std::fs::read_to_string(&path).unwrap());
+        let a = e.iter().find(|e| e.freq == 145_500_000).unwrap();
+        assert!(a.off && a.rec && a.mode == Some(Modulation::Digi));
+        assert_eq!(a.name.as_deref(), Some("B"));
+        set_off(
+            &path,
+            &[145_500_000, 145_600_000, 145_700_000],
+            6_250.0,
+            false,
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("off"), "{text}");
+        assert!(text.contains("\r\nnot a line\r\n"), "{text}");
+        assert!(!dir.join("rfscan-channels.txt.tmp").exists());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

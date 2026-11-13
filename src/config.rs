@@ -184,7 +184,11 @@ fn merge(argv: &[OsString], cli_m: &ArgMatches, text: &str, name: &str) -> Resul
     let m = cmd
         .try_get_matches_from(all)
         .map_err(|e| format!("{name}: {}", first_line(&e)))?;
-    from_matches(&m)
+    let mut cli = from_matches(&m)?;
+    // Ranges given on the command line replace those of the file.
+    cli.scan_range_from_conf = cli_m.value_source("scan_range") != Some(ValueSource::CommandLine)
+        && !cli.scan_range.is_empty();
+    Ok(cli)
 }
 
 /// The file values as command line arguments (`--key=value`, `--switch`), without the options
@@ -411,7 +415,8 @@ mod tests {
         assert!(c.tui && c.web_gui.0.is_none());
         assert_eq!(c.dsd_fme_args, "-fa -1 1234");
         assert_eq!(c.scan_range.len(), 2);
-        // The command line replaces the value, also a whole list.
+        // Ranges from the file are named so in messages (e.g. overlapping ranges).
+        assert!(c.scan_range_from_conf);
         let c = run(
             &["--squelch-snr", "7", "--scan-range", "118M-137M:am"],
             file,
@@ -420,6 +425,23 @@ mod tests {
         assert_eq!(c.squelch_snr, 7.0);
         assert_eq!(c.scan_range.len(), 1);
         assert_eq!(c.scan_range[0].start, 118_000_000);
+        assert!(!c.scan_range_from_conf);
+        assert!(
+            run(
+                &[],
+                "squelch-snr = 5
+"
+            )
+            .is_ok_and(|c| !c.scan_range_from_conf)
+        );
+        // The range file can be set in the file too.
+        let c = run(
+            &[],
+            "ranges-file = \"my-ranges.txt\"
+",
+        )
+        .unwrap();
+        assert_eq!(c.ranges_file, Some("my-ranges.txt".into()));
         // A conflicting command line option drops the file value: no conflict error.
         let c = run(&["--scan-channels", "145.5M"], file).unwrap();
         assert!(c.scan_range.is_empty() && c.scan_channels.is_some());

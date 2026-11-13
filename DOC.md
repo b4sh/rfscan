@@ -175,6 +175,8 @@ rfscan prints the link at startup. The **Scanner** tab shows the frequency or ch
 - **Exclusions:** tapping one edits its note, keeps a timed one for good or deletes it; a timed one shows the minutes left.
 - **Recordings** (with `--record-dir`): play or delete.
 
+Above the list tabs (on a phone: above the bottom bar) a large button opens the **scan list**: **Ranges** in range mode, **Channels** in channel mode, with the number switched on out of all, e.g. `Ranges 3/5`. See [Scan list](#scan-list-switching-ranges-and-channels).
+
 The page has a dark and a light theme. It works with the console mode and with `--tui`, and several browsers can be connected at once, each with full control.
 
 The audio is sent to the browser as 8 kHz μ-law (64 kbit/s, 300-3000 Hz) after **Audio** is tapped (browsers need a tap before playing sound); the delay is about 0.2-0.3 s more than the local audio. With `--local-audio off`, the usual setting of a server, the page is the only audio, so it turns its audio on by itself; when the browser still waits for a tap, the button shows **Tap to start audio** and the first tap anywhere on the page starts the sound. An ordinary browser tab usually needs this tap, because browsers block sound until a page has been touched. A page installed as an app (PWA) started without a tap in Chrome on a phone and on a PC. With the local audio on (the default) the computer keeps playing next to the browsers, and **Mute PC** mutes it (like `m` in the TUI).
@@ -191,7 +193,7 @@ The audio is sent to the browser as 8 kHz μ-law (64 kbit/s, 300-3000 Hz) after 
 
 There are two scan modes; one of them is used at a time.
 
-**Ranges:** `--scan-range START-STOP[:STEP][:nfm|am|digi][:bw=BW]`, may be given several times; the ranges are scanned in the order given. Values take the suffixes `k`, `M`, `G`. Examples:
+**Ranges:** from the [range file](#range-file) and from `--scan-range START-STOP[:STEP][:nfm|am|digi][:bw=BW]` (may be given several times), scanned together in ascending order of their start frequency. Values take the suffixes `k`, `M`, `G`. Examples:
 
 ```
 --scan-range 144M-146M                 # NFM, 12.5 kHz step
@@ -202,7 +204,28 @@ There are two scan modes; one of them is used at a time.
 
 **Channels:** `--scan-channels F[:nfm|am|digi][:bw=BW],...`, e.g. `--scan-channels 145.5M,118.1M:am:bw=10k`. Without a list, `--scan-channels` scans all channels from the [channel file](#channel-file-names-and-modes). Channels that fit in one window are checked with a single tuning.
 
-Without a scan mode rfscan scans 144-146 MHz, NFM, 12.5 kHz.
+Without a scan mode and without a range in the range file rfscan scans 144-146 MHz, NFM, 12.5 kHz.
+
+**Overlapping ranges are an error:** no frequency may be scanned twice. Two ranges overlap when they have any common point, a shared edge included (`144-145` and `145-146` both contain 145.000), also when one of them is switched off. rfscan names each pair (the line of the range file, the command line or `rfscan.conf`), suggests a fix (start the later range at its first channel above the end of the earlier one, end the earlier one below the start of the later one, or for a range inside another remove it or split the outer one around it) and exits.
+
+### Range file
+
+The ranges can be kept in `~/.config/rfscan/rfscan-ranges.txt` (or `--ranges-file FILE`, also in `rfscan.conf`), read at every start; a missing file is no error. One range per line, `#` starts a comment:
+
+```
+# rfscan: ranges
+118.000-137.000 8.33k am "Airband"
+144.000-146.000 12.5k fm bw=12.5k "2m"
+430.000-432.000 12.5k off
+433.000-435.000 25k bw=12.5k "LPD"
+```
+
+Line syntax: `START-STOP [STEP] [am|fm] [bw=BW] [off] ["name"]`. Only `START-STOP` (MHz) is required; the other fields come in any order before the name, with the suffixes of the command line (`12.5k`). Missing fields are filled as for `--scan-range` (`--step`, `--bw`, `--mode`, the defaults above). `digi` is not a range mode here: mark `digi` channels in the [channel file](#channel-file-names-and-modes). A line that cannot be read, or a range that does not fit the receiver (its frequency range, the window band), gives a warning with its number and is skipped; rfscan never deletes such a line.
+
+- `off` switches the range off in the scan list; rfscan writes and removes it when you switch the range, and writes the name when you name it, leaving every other field and line as it was.
+- The ranges of `--scan-range` (command line or `rfscan.conf`) are scanned together with the file. One with the start, stop and step of a file line is that line (its name and `off` come from the file, and switching it writes the file); if its mode or `bw` differ, the command line wins for this session with a warning, and the file is not changed. Any other one exists only in this session: it starts switched on and its switch writes nothing, until you name it, which appends it to the file with all its fields.
+- With ranges in the file there is no default 144-146 MHz range. With `--scan-channels` the range file is not used. `--bench` and `--calibrate` do not read it: they measure the `--scan-range` ranges (or the default range).
+- A good use: define the ranges you need only now and then in advance and keep them switched off; switch them on from the phone when needed.
 
 **Step and bandwidth** are two separate things. The step is the channel grid (channel n = start + n·step, computed in whole Hz without drift); `bw` is the received bandwidth of a channel: where the detector measures the power and the width of the demodulator filter. An 8.33 kHz step means exactly 25/3 kHz, the airband grid. The step is one of the standard steps 2.5k, 5k, 6.25k, 7.5k, 8.33k, 9k, 10k, 12.5k, 15k, 20k, 25k, 30k, 50k, and `bw` lies between 2.5k and 50k; other values are an error (a number without a suffix is in Hz, so `8.33` is 8 Hz and rfscan suggests `8.33k`). Defaults: in ranges `bw` is equal to the step in every mode, the step is 8.33 kHz for AM and 12.5 kHz for NFM and `digi`; in a channel list `bw` is 8.33 kHz for AM and 12.5 kHz for NFM and `digi`. `--step`, `--bw` and `--mode` set the defaults for ranges and channels without their own. A `bw` smaller than the step leaves gaps between channels (a warning), a `bw` above 25 kHz in FM gives a warning (wideband FM is not supported).
 
@@ -217,6 +240,16 @@ Without a scan mode rfscan scans 144-146 MHz, NFM, 12.5 kHz.
 - **Confirmation** (`--confirm on|off`, default on). Before stopping, rfscan measures the channel again with the tuner set elsewhere (for about 60 ms). A real signal stays on its frequency; images and spurs of the receiver move with the tuner and are rejected (`rejected` in the console). Cost: about one settle plus 60 ms per hit.
 - **States.** LOCKED: the channel is demodulated and played. When the SNR falls below the threshold minus `--hysteresis` (default 3 dB) for 30 ms (on `digi` channels for `--digi-hold` ms, default 120, longer than the gaps between the TDMA bursts of a DMR radio in direct mode), the scanner waits (HANG) for `--pause` seconds (default 2); if the signal returns, it goes back to the channel, otherwise it goes on scanning from the next window.
 
+## Scan list: switching ranges and channels
+
+The ranges of the session (range mode) or the channels (channel mode) can be switched on and off while scanning, without a restart: in the web GUI (the **Ranges** / **Channels** button) and in the TUI (`g`). A switch applies from the next window and is saved at once: `off` in the range file or in the channel file. The list shows only the current mode.
+
+- **Ranges:** start-stop, step, `bw`, mode, name and the **Scan** checkbox. Tapping a row (TUI: `l`) names the range; an empty name removes it. **All** / **None** (TUI: `A` / `N`) switch every range as one write.
+- **Channels:** frequency, name, mode, **Scan** and **Rec** (the `rec` of the channel file, as in the history). A text filter (TUI: `/`) narrows the list, and **All** / **None** act on the rows shown. With `--scan-channels` without a list the switches write `off` to the channel file; channels given on the command line all start switched on and their switches last until rfscan ends. A channel added to the channel file while running (e.g. named from the history) is marked *after restart*; `digi` channels without `--digi` or `--digi-tcp` cannot be switched.
+- A switched off item is only skipped: windows without a channel switched on are not tuned at all, and the scan speed counts only what is switched on. Switching off the range or channel the scanner is on mutes it at once and goes on scanning. Exclusions and the skipping of `digi` channels stay as they are: switching an item on never brings back an excluded channel.
+- **Everything switched off:** rfscan does not stop; it waits without retuning (state IDLE, the page and the console say that nothing is switched on) until something is switched on. At startup the console says how many items are switched off.
+- The plan is built at startup from all items, also the switched off ones, so the FFT size follows the narrowest channel of all of them until a restart. Ranges and channels are added or removed by editing the files and restarting rfscan.
+
 ## Channel file: names and modes
 
 The channel file (default `~/.config/rfscan/rfscan-channels.txt`, or `--channels-file`) gives names and modes to known frequencies. It is read at every start; rfscan writes it only when you name a channel, mark it `digi` or switch its recording in the web GUI or the TUI. One channel per line, `#` starts a comment:
@@ -230,11 +263,12 @@ The channel file (default `~/.config/rfscan/rfscan-channels.txt`, or `--channels
 145.550 rec "SIMPLEX"
 ```
 
-Line syntax: `FREQUENCY_MHz [am|fm|digi] [rec] [bw=WIDTH] ["name"]`; the mode, `rec` and `bw=` in any order before the name, everything except the frequency optional. Names may contain any characters (UTF-8). A line that cannot be read gives a warning with its number and is skipped.
+Line syntax: `FREQUENCY_MHz [am|fm|digi] [rec] [off] [bw=WIDTH] ["name"]`; the mode, `rec`, `off` and `bw=` in any order before the name, everything except the frequency optional. Names may contain any characters (UTF-8). A line that cannot be read gives a warning with its number and is skipped.
 
 - The name is shown when the scanner stops on the frequency (web GUI, TUI, console, history, activity, `--report`), both when scanning a range and channels. Unknown frequencies show no name.
 - The mode of the file applies also while scanning a range: a known `digi` frequency in an NFM range is handled as `digi`. Precedence: the mode in `--scan-channels F:MODE`, then the file, then the range suffix, then `--mode`. The `bw=` of the file sets the demodulator width.
 - `rec` marks a channel whose audio is recorded (see [Audio recording](#audio-recording)).
+- `off` switches the channel off in the scan list of `--scan-channels` without a list (see [Scan list](#scan-list-switching-ranges-and-channels)); it has no effect in range mode. Naming a channel or switching `digi` or `rec` keeps it.
 - In range mode an entry matches the nearest grid channel within half a step, and rfscan listens on that grid channel. An entry farther than 1% of the step from the grid (e.g. `433.450` in `433.420M-433.470M` with a 12.5 kHz step) gives a warning at startup: choose the range start or step so that the grid includes it.
 
 ## Exclusions
@@ -391,6 +425,7 @@ By default rfscan writes events and the log to the console (without `--tui`; the
 | `a` | activity screen (`←` / `→` sort column, `s` reverse the order, `l` name a channel, `Tab` in the popup: `digi`, `r` record its audio on/off, `x` exclude, `d` delete the entry, `c` clear) |
 | `e` | exclusions screen (`Enter` edit the note, `d` remove, `s` keep a timed exclusion for good) |
 | `w` | recordings screen, with `--record-dir` (`Enter` a channel's files, `Enter` play / stop a file, `d` delete it, `D` delete all, `Esc` back) |
+| `g` | scan list (ranges or channels): space switches the selected row, `l` names it, `A` / `N` all on / off; channels also `r` record on/off and `/` filter; `g` / `Esc` back |
 | `Tab` | select a detection history row (arrows move, `l` name the channel, `r` record its audio on/off, `x` / `X` exclude it (with adjacent channels), `Tab` / `Esc` back) |
 
 ## IQ recording
@@ -427,7 +462,8 @@ rfscan keeps its files in `~/.config/rfscan` (on Windows `C:\Users\USER\.config\
 
 | File | Contents | Option |
 |---|---|---|
-| `rfscan-channels.txt` | channel names, modes, bandwidths and `rec` marks | `--channels-file` |
+| `rfscan-channels.txt` | channel names, modes, bandwidths, `rec` and `off` marks | `--channels-file` |
+| `rfscan-ranges.txt` | ranges with step, bandwidth, mode, name and `off` | `--ranges-file` |
 | `rfscan-exclude.txt` | excluded frequencies with notes | `--exclude-file` |
 | `rfscan-activity.txt` | activity log (`rfscan --report`) | `--activity-file` |
 | `rfscan.conf` | options used at every start | `--config` |

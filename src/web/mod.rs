@@ -544,6 +544,16 @@ enum ClientMsg {
     RecDeleteAll {
         channel: Option<u64>,
     },
+    /// Switch items of the scan list on or off (as one write).
+    Scan {
+        items: Vec<usize>,
+        on: bool,
+    },
+    /// Name a range of the scan list (an empty name removes it).
+    RangeName {
+        item: usize,
+        name: String,
+    },
 }
 
 /// Typed text: trimmed, without control characters, at most `TEXT_MAX` characters.
@@ -631,6 +641,7 @@ fn handle(hub: &Hub, cmd: ClientMsg) -> Option<Value> {
                         });
                     }
                     let activity = activity_json(&ctx);
+                    hub.send(scan_list_json(&ctx));
                     drop(ctx);
                     // The names in the history and the lock view change at once.
                     resend_history(hub);
@@ -644,9 +655,18 @@ fn handle(hub: &Hub, cmd: ClientMsg) -> Option<Value> {
                 return Some(error_json(&e));
             }
             let activity = activity_json(&ctx);
+            hub.send(scan_list_json(&ctx));
             drop(ctx);
             resend_history(hub);
             return Some(activity);
+        }
+        ClientMsg::Scan { items, on } => send(Command::SetScan { items, on }),
+        ClientMsg::RangeName { item, name } => {
+            let name = clean_text(&name);
+            send(Command::NameRange {
+                item,
+                name: (!name.is_empty()).then_some(name),
+            });
         }
         ClientMsg::ClearActivity => {
             if let Err(e) = ctx.clear_activity() {
@@ -761,6 +781,12 @@ fn apply(hub: &Hub, e: UiEvent) {
             hub.send(json!({ "t": "history_add", "item": history_item_json(&ctx, &h) }));
         }
         UiEvent::ExclusionsChanged => hub.send(exclusions_json(&ctx)),
+        UiEvent::ScanListChanged => {
+            hub.send(scan_list_json(&ctx));
+            if let Some(e) = ctx.scan_error() {
+                hub.send(error_json(&e));
+            }
+        }
     }
 }
 
@@ -801,6 +827,7 @@ fn snapshot_messages(hub: &Hub) -> Vec<String> {
     });
     out.push(history_json(&ctx, &snap.history).to_string());
     out.push(exclusions_json(&ctx).to_string());
+    out.push(scan_list_json(&ctx).to_string());
     out
 }
 
@@ -864,6 +891,7 @@ fn status_json(ctx: &UiContext, s: &Status, hub: &Hub) -> Value {
         }
         _ => json!([0.0, 1.0]),
     };
+    let range_name = ctx.range_name(r);
     let name = ctx.window_names.get(w).map_or("", String::as_str);
     // The window being measured when the status was sent, also during fast scanning (unlike the
     // TUI, which shows `-` then): the position bar shows all the windows measured meanwhile.
@@ -881,12 +909,14 @@ fn status_json(ctx: &UiContext, s: &Status, hub: &Hub) -> Value {
         ScanState::Locked => "locked",
         ScanState::Hang => "hang",
         ScanState::Paused => "paused",
+        ScanState::Idle => "idle",
     };
     json!({
         "t": "status",
         "state": state,
         "range": r + 1,
         "span": range.map_or("", |r| r.span.as_str()),
+        "range_name": range_name,
         "pos": pos,
         "pass": pass,
         "window": window,
@@ -1105,6 +1135,40 @@ fn rec_files_json(ctx: &UiContext, channel: u64) -> Value {
         "label": chan.as_ref().map(|c| c.label.clone()),
         "name": chan.as_ref().and_then(|c| c.name.clone()),
         "count": chan.as_ref().map_or(0, |c| c.count),
+        "items": items,
+    })
+}
+
+/// The scan list: the ranges or the channels with their Scan switch, the counter of the button
+/// (scanned items of all) and the kind, which names the list.
+fn scan_list_json(ctx: &UiContext) -> Value {
+    let (kind, on, all) = ctx.scan_summary();
+    let items: Vec<Value> = ctx
+        .scan_rows("")
+        .iter()
+        .map(|r| {
+            json!({
+                "item": r.item,
+                "freq": r.freq,
+                "label": r.label,
+                "step": r.step,
+                "bw": r.bw,
+                "mode": r.mode,
+                "name": r.name,
+                "scan": r.enabled,
+                "rec": r.rec,
+                "note": r.note,
+            })
+        })
+        .collect();
+    json!({
+        "t": "scan_list",
+        "kind": match kind {
+            crate::scan_list::ListKind::Ranges => "ranges",
+            crate::scan_list::ListKind::Channels => "channels",
+        },
+        "on": on,
+        "all": all,
         "items": items,
     })
 }
@@ -1568,5 +1632,102 @@ mod tests {
             ClientMsg::RecDelete { id: 7, channel: 3 }
         ));
         assert_eq!(clean_text("  a\u{7}b  "), "ab");
+    }
+
+    /// The scan list messages: switching (one or all as one command) and naming a range.
+    #[test]
+    fn scan_list_messages() {
+        assert!(matches!(
+            serde_json::from_str::<ClientMsg>(r#"{"c":"scan","items":[0,2],"on":false}"#).unwrap(),
+            ClientMsg::Scan { items, on: false } if items == [0, 2]
+        ));
+        assert!(matches!(
+            serde_json::from_str::<ClientMsg>(r#"{"c":"range_name","item":1,"name":"2m"}"#).unwrap(),
+            ClientMsg::RangeName { item: 1, name } if name == "2m"
+        ));
+    }
+
+    /// The list per mode: ranges with their fields and the button counter; channels with names,
+    /// rec and a channel added while running.
+    #[test]
+    fn scan_list_contents_per_mode() {
+        let mut ctx = crate::ui::test_context();
+        let v = scan_list_json(&ctx);
+        assert_eq!(
+            (v["t"].as_str(), v["kind"].as_str()),
+            (Some("scan_list"), Some("ranges"))
+        );
+        assert_eq!((v["on"].as_u64(), v["all"].as_u64()), (Some(1), Some(2)));
+        let items = v["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["label"], "118.000 - 136.675");
+        assert_eq!(
+            (items[0]["step"].as_str(), items[0]["bw"].as_str()),
+            (Some("8.33"), Some("8.33"))
+        );
+        assert_eq!(
+            (items[0]["mode"].as_str(), items[0]["name"].as_str()),
+            (Some("AM"), Some("Airband"))
+        );
+        assert_eq!(
+            (items[0]["scan"].as_bool(), items[1]["scan"].as_bool()),
+            (Some(true), Some(false))
+        );
+        assert_eq!(items[1]["item"].as_u64(), Some(1));
+
+        {
+            use crate::scan_list::{ListKind, ScanItem, Store};
+            let mut l = ctx.scan_list.lock().unwrap();
+            l.kind = ListKind::Channels;
+            l.items = vec![ScanItem {
+                start: 433_375_000,
+                stop: 433_375_000,
+                step: 0.0,
+                bw: 12_500.0,
+                mode: crate::plan::Modulation::Nfm,
+                name: None,
+                enabled: true,
+                store: Store::ChannelFile,
+                channels: 0..1,
+                inactive: None,
+            }];
+        }
+        ctx.channel_db.push((433_450_000, "NEW".into()));
+        let v = scan_list_json(&ctx);
+        assert_eq!(v["kind"], "channels");
+        assert_eq!((v["on"].as_u64(), v["all"].as_u64()), (Some(1), Some(1)));
+        let items = v["items"].as_array().unwrap();
+        // The named channels of the file that are not in the plan come after a restart.
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0]["note"], "after restart");
+        assert_eq!(items[1]["rec"].as_bool(), Some(true));
+        assert!(items[1]["note"].is_null());
+        assert_eq!(items[1]["item"].as_u64(), Some(0));
+        assert!(items[2]["item"].is_null());
+        assert_eq!(
+            (items[2]["name"].as_str(), items[2]["note"].as_str()),
+            (Some("NEW"), Some("after restart"))
+        );
+    }
+
+    /// The page has the scan list button above the list tabs and above the bottom bar, the list
+    /// pane with All and None, and the messages it sends.
+    #[test]
+    fn page_has_the_scan_list() {
+        for id in [
+            "id=\"bScanWide\"",
+            "id=\"bScanPhone\"",
+            "id=\"pane-scan\"",
+            "id=\"scanAll\"",
+            "id=\"scanNone\"",
+            "id=\"scanFilter\"",
+        ] {
+            assert!(INDEX_HTML.contains(id), "{id}");
+        }
+        assert!(INDEX_HTML.find("bScanWide") < INDEX_HTML.find("class=\"listtabs\""));
+        assert!(INDEX_HTML.find("id=\"bScanPhone\"") < INDEX_HTML.find("<nav class=\"tabs\">"));
+        for msg in ["c: \"scan\"", "c: \"range_name\"", "case \"scan_list\""] {
+            assert!(INDEX_HTML.contains(msg), "{msg}");
+        }
     }
 }

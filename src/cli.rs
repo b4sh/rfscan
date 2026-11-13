@@ -139,6 +139,16 @@ pub struct Cli {
     #[arg(long, value_name = "FILE", hide_short_help = true, help_heading = H_SCAN)]
     pub channels_file: Option<std::path::PathBuf>,
 
+    /// Range file: ranges with step, bw, mode, name and off, scanned together with --scan-range
+    /// (not with --scan-channels). Default: ~/.config/rfscan/rfscan-ranges.txt
+    #[arg(long, value_name = "FILE", hide_short_help = true, help_heading = H_SCAN)]
+    pub ranges_file: Option<std::path::PathBuf>,
+
+    /// The --scan-range values come from the configuration file, not the command line (for
+    /// messages).
+    #[arg(skip)]
+    pub scan_range_from_conf: bool,
+
     /// Temporary exclusions of single channels (MHz, comma separated), e.g. 144.0,156.0.
     /// Not saved to the file
     #[arg(long, value_name = "MHZ,...", hide_short_help = true, help_heading = H_SCAN)]

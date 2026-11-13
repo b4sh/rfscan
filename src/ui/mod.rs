@@ -97,6 +97,8 @@ pub struct UiContext {
     pub recordings: Option<crate::recordings::SharedLibrary>,
     /// Playback of recordings on the local output (TUI); `None` without a local output.
     pub player: Option<Arc<crate::recordings::Player>>,
+    /// The scan list (ranges or channels switched on and off), switched by the scanner.
+    pub scan_list: crate::scan_list::SharedScanList,
 }
 
 impl UiContext {
@@ -390,12 +392,173 @@ impl UiContext {
         }
     }
 
+    /// The kind of the scan list (ranges or channels), the scanned items and all items.
+    pub(crate) fn scan_summary(&self) -> (crate::scan_list::ListKind, usize, usize) {
+        match self.scan_list.lock() {
+            Ok(l) => {
+                let (on, all) = l.counts();
+                (l.kind, on, all)
+            }
+            Err(_) => (crate::scan_list::ListKind::Ranges, 0, 0),
+        }
+    }
+
+    /// The error of the last switch or name of the scan list, if it failed.
+    pub(crate) fn scan_error(&self) -> Option<String> {
+        self.scan_list.lock().ok().and_then(|l| l.error.clone())
+    }
+
+    /// The name of a range of the scan list.
+    pub(crate) fn range_name(&self, range: usize) -> Option<String> {
+        let l = self.scan_list.lock().ok()?;
+        if l.kind != crate::scan_list::ListKind::Ranges {
+            return None;
+        }
+        l.items.get(range).and_then(|i| i.name.clone())
+    }
+
+    /// The rows of the scan list matching `filter` (any part of the frequency, name or mode,
+    /// letter case ignored). In channel mode from the channel file, channels added to the file
+    /// while running are listed too, marked `after restart` (they are not in the plan).
+    pub(crate) fn scan_rows(&self, filter: &str) -> Vec<ScanRow> {
+        use crate::scan_list::{DIGI_HINT, ListKind, Store};
+        let Ok(list) = self.scan_list.lock() else {
+            return Vec::new();
+        };
+        let mut rows: Vec<ScanRow> = list
+            .items
+            .iter()
+            .enumerate()
+            .map(|(i, it)| {
+                if list.kind == ListKind::Ranges {
+                    return ScanRow {
+                        item: Some(i),
+                        freq: it.start,
+                        label: format!(
+                            "{} - {}",
+                            crate::activity::format_mhz(it.start),
+                            crate::activity::format_mhz(it.stop)
+                        ),
+                        step: crate::ranges::khz_text(it.step)
+                            .trim_end_matches('k')
+                            .to_string(),
+                        bw: crate::ranges::khz_text(it.bw)
+                            .trim_end_matches('k')
+                            .to_string(),
+                        mode: it.mode.name(),
+                        name: it.name.clone(),
+                        enabled: it.enabled,
+                        rec: false,
+                        note: None,
+                    };
+                }
+                let digi = it.mode == crate::plan::Modulation::Digi || self.digi_near(it.start);
+                ScanRow {
+                    item: Some(i),
+                    freq: it.start,
+                    label: self.freq_label(it.start),
+                    step: String::new(),
+                    bw: crate::ranges::khz_text(it.bw)
+                        .trim_end_matches('k')
+                        .to_string(),
+                    mode: if digi {
+                        crate::plan::Modulation::Digi.name()
+                    } else {
+                        it.mode.name()
+                    },
+                    name: self.name_near(it.start).map(str::to_string),
+                    enabled: it.enabled,
+                    rec: self.rec_near(it.start),
+                    note: it
+                        .inactive
+                        .or((digi && self.digi.is_none()).then_some(DIGI_HINT)),
+                }
+            })
+            .collect();
+        // Channels added to the channel file while running (named or marked `rec`).
+        if list.kind == ListKind::Channels
+            && list.items.iter().any(|i| i.store == Store::ChannelFile)
+        {
+            let mut added: Vec<u64> = self
+                .channel_db
+                .iter()
+                .map(|(f, _)| *f)
+                .chain(self.rec_list.lock().map(|l| l.clone()).unwrap_or_default())
+                .chain(self.digi_db.iter().copied())
+                .filter(|&f| {
+                    !list
+                        .items
+                        .iter()
+                        .any(|i| i.start.abs_diff(f) <= NAME_TOLERANCE_HZ)
+                })
+                .collect();
+            added.sort_unstable();
+            added.dedup();
+            rows.extend(added.into_iter().map(|f| ScanRow {
+                item: None,
+                freq: f,
+                label: self.freq_label(f),
+                step: String::new(),
+                bw: String::new(),
+                mode: if self.digi_near(f) {
+                    crate::plan::Modulation::Digi.name()
+                } else {
+                    ""
+                },
+                name: self.name_near(f).map(str::to_string),
+                enabled: false,
+                rec: self.rec_near(f),
+                note: Some(AFTER_RESTART),
+            }));
+            rows.sort_by_key(|r| r.freq);
+        }
+        let filter = filter.trim().to_lowercase();
+        if !filter.is_empty() {
+            rows.retain(|r| {
+                [r.label.as_str(), r.name.as_deref().unwrap_or(""), r.mode]
+                    .iter()
+                    .any(|t| t.to_lowercase().contains(&filter))
+            });
+        }
+        rows
+    }
+
     /// The exclusion list: timed entries, then the file entries with their notes.
     pub(crate) fn exclusion_list(&self) -> Vec<crate::exclusions::Item> {
         self.exclusions
             .lock()
             .map(|l| l.clone())
             .unwrap_or_default()
+    }
+}
+
+/// The note of a channel added to the channel file while running: not in the plan.
+pub(crate) const AFTER_RESTART: &str = "after restart";
+
+/// A row of the scan list (TUI screen and web GUI).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScanRow {
+    /// The item in the shared list; `None` for a channel added to the channel file while running.
+    pub(crate) item: Option<usize>,
+    /// Range start or channel frequency.
+    pub(crate) freq: u64,
+    /// `144.000-146.000` or the channel frequency as shown.
+    pub(crate) label: String,
+    /// Step and bandwidth in kHz (`12.5`), the step empty for a channel.
+    pub(crate) step: String,
+    pub(crate) bw: String,
+    pub(crate) mode: &'static str,
+    pub(crate) name: Option<String>,
+    pub(crate) enabled: bool,
+    pub(crate) rec: bool,
+    /// Why the Scan switch is inactive (`after restart`, a digi channel without a digi output).
+    pub(crate) note: Option<&'static str>,
+}
+
+impl ScanRow {
+    /// The item, when its Scan switch can be changed.
+    pub(crate) fn switchable(&self) -> Option<usize> {
+        self.item.filter(|_| self.note.is_none())
     }
 }
 
@@ -526,6 +689,9 @@ pub enum EditKind {
     },
     /// The note of an existing exclusion (`[Enter]` on the exclusions screen).
     Note,
+    /// The name of a range of the scan list (`[l]` on the scan list screen), saved to the range
+    /// file; an empty name removes it.
+    RangeName { item: usize },
 }
 
 /// The next duration of a timed exclusion after `[Tab]`: permanent, then each of
@@ -552,6 +718,7 @@ enum Screen {
     Activity,
     Exclusions,
     Recordings,
+    ScanList,
 }
 
 /// Linux thermal zone of the processor (millidegrees Celsius); missing on Windows and on
@@ -635,6 +802,11 @@ struct App {
     rec_sel: usize,
     rec_channel: Option<u64>,
     rec_file_sel: usize,
+    /// Scan list screen: the selected row, the text filter (channels) and whether it is being
+    /// typed.
+    scan_sel: usize,
+    scan_filter: String,
+    scan_filter_edit: bool,
 }
 
 /// Runs the TUI until the scanner finishes (the event channel closes).
@@ -665,6 +837,9 @@ pub fn run(
         rec_sel: 0,
         rec_channel: None,
         rec_file_sel: 0,
+        scan_sel: 0,
+        scan_filter: String::new(),
+        scan_filter_edit: false,
     };
     let result = event_loop(&mut terminal, &mut app, &events, &commands);
     ratatui::restore();
@@ -754,7 +929,7 @@ impl App {
                     *sel = (*sel + 1).min(self.history.len() - 1);
                 }
             }
-            UiEvent::ExclusionsChanged => {}
+            UiEvent::ExclusionsChanged | UiEvent::ScanListChanged => {}
         }
     }
 
@@ -819,6 +994,10 @@ impl App {
                 }
                 KeyCode::Char('e') => {
                     self.screen = Screen::Exclusions;
+                    None
+                }
+                KeyCode::Char('g') => {
+                    self.screen = Screen::ScanList;
                     None
                 }
                 KeyCode::Char('w') if self.ctx.recordings.is_some() => {
@@ -935,6 +1114,7 @@ impl App {
                 }
                 None
             }
+            Screen::ScanList => self.scan_list_key(code),
             Screen::Recordings => {
                 match self.rec_channel {
                     None => {
@@ -1090,7 +1270,7 @@ impl App {
             KeyCode::Tab => match &mut edit.kind {
                 EditKind::Label { digi, .. } => *digi = !*digi,
                 EditKind::Exclude { minutes, .. } => *minutes = next_minutes(*minutes),
-                EditKind::Note => {}
+                EditKind::Note | EditKind::RangeName { .. } => {}
             },
             KeyCode::Char(c) if edit.text.chars().count() < LABEL_MAX && !c.is_control() => {
                 edit.text.push(c);
@@ -1118,6 +1298,13 @@ impl App {
                         return Some(Command::SetExclusionNote {
                             freq,
                             note: (!text.is_empty()).then_some(text),
+                        });
+                    }
+                    EditKind::RangeName { item } => {
+                        self.edit = None;
+                        return Some(Command::NameRange {
+                            item,
+                            name: (!text.is_empty()).then_some(text),
                         });
                     }
                     EditKind::Label { digi, was } => {
@@ -1150,6 +1337,90 @@ impl App {
 
     fn activity_rows(&self) -> Vec<ActivityRow> {
         self.ctx.activity_rows(self.activity_sort)
+    }
+
+    /// The rows of the scan list screen (with the text filter in channel mode).
+    fn scan_rows(&self) -> Vec<ScanRow> {
+        self.ctx.scan_rows(&self.scan_filter)
+    }
+
+    /// A key on the scan list screen: `[space]` switches the selected row, `[l]` names it,
+    /// `[A]`/`[N]` switch all (filtered) rows on or off as one write; channels also `[r]` rec
+    /// and `[/]` the text filter.
+    fn scan_list_key(&mut self, code: KeyCode) -> Option<Command> {
+        use crate::scan_list::ListKind;
+        let channels = self.ctx.scan_summary().0 == ListKind::Channels;
+        if self.scan_filter_edit {
+            match code {
+                KeyCode::Enter => self.scan_filter_edit = false,
+                KeyCode::Esc => {
+                    self.scan_filter_edit = false;
+                    self.scan_filter.clear();
+                }
+                KeyCode::Backspace => {
+                    self.scan_filter.pop();
+                }
+                KeyCode::Char(c)
+                    if self.scan_filter.chars().count() < LABEL_MAX && !c.is_control() =>
+                {
+                    self.scan_filter.push(c);
+                }
+                _ => {}
+            }
+            self.scan_sel = 0;
+            return None;
+        }
+        let rows = self.scan_rows();
+        let sel = rows.get(self.scan_sel.min(rows.len().saturating_sub(1)));
+        match code {
+            KeyCode::Char('g') | KeyCode::Esc => self.screen = Screen::Main,
+            KeyCode::Char(' ') => {
+                if let Some(r) = sel
+                    && let Some(item) = r.switchable()
+                {
+                    return Some(Command::SetScan {
+                        items: vec![item],
+                        on: !r.enabled,
+                    });
+                }
+            }
+            KeyCode::Char(c @ ('A' | 'N')) => {
+                let items: Vec<usize> = rows.iter().filter_map(ScanRow::switchable).collect();
+                if !items.is_empty() {
+                    return Some(Command::SetScan {
+                        items,
+                        on: c == 'A',
+                    });
+                }
+            }
+            KeyCode::Char('l') => match sel {
+                Some(r) if !channels => {
+                    if let Some(item) = r.item {
+                        self.edit = Some(LabelEdit {
+                            kind: EditKind::RangeName { item },
+                            freq: r.freq,
+                            text: r.name.clone().unwrap_or_default(),
+                            error: None,
+                        });
+                    }
+                }
+                Some(r) => {
+                    let freq = r.freq;
+                    self.open_label(freq);
+                }
+                None => {}
+            },
+            KeyCode::Char('r') if channels => {
+                if let Some(freq) = sel.map(|r| r.freq) {
+                    self.toggle_rec(freq);
+                }
+            }
+            KeyCode::Char('/') if channels => {
+                self.scan_filter_edit = true;
+            }
+            _ => scroll(&mut self.scan_sel, rows.len(), code),
+        }
+        None
     }
 
     fn exclusion_list(&self) -> Vec<crate::exclusions::Item> {
@@ -1217,6 +1488,125 @@ fn scroll(sel: &mut usize, len: usize, code: KeyCode) {
     .min(last);
 }
 
+/// The context of the interface tests: two ranges (the airband named, 430-440 MHz switched off),
+/// a named channel, exclusions and one channel marked `rec`.
+#[cfg(test)]
+pub(crate) fn test_context() -> UiContext {
+    UiContext {
+        device: "airspy 2064c8703d20018".into(),
+        sample_rate: 6e6,
+        gain: "agc=true,VGA=7".into(),
+        ranges: vec![
+            RangeLabel {
+                span: "118.000 - 136.675 MHz".into(),
+                start: 118_000_000,
+                stop: 136_675_000,
+            },
+            RangeLabel {
+                span: "430.000-440.000 MHz".into(),
+                start: 430_000_000,
+                stop: 440_000_000,
+            },
+        ],
+        window_range: vec![0, 0, 0, 0, 1, 1, 1, 1, 1, 1],
+        window_names: (0..10).map(|i| format!("A{i}")).collect(),
+        window_span: (0..10u64)
+            .map(|i| match i {
+                0..4 => (
+                    118_000_000 + i * 4_700_000,
+                    118_000_000 + i * 4_700_000 + 4_690_000,
+                ),
+                _ => {
+                    let s = 430_000_000 + (i - 4) * 1_600_000;
+                    (s, s + 1_590_000)
+                }
+            })
+            .collect(),
+        names: vec![Some("AMATEUR CALLING FREQ".into()), None],
+        channel_db: vec![(145_500_000, "AMATEUR CALLING FREQ".into())],
+        digi_db: Vec::new(),
+        raster25: Vec::new(),
+        channels_path: None,
+        channel_freqs: vec![145_500_000, 433_375_000],
+        activity: Arc::new(Mutex::new(ActivityLog::default())),
+        activity_path: PathBuf::from("rfscan-activity.txt"),
+        exclusions: Arc::new(Mutex::new(vec![
+            crate::exclusions::Item {
+                freq: 433_625_000,
+                note: Some("beacon".into()),
+                until: Some(Instant::now() + Duration::from_secs(23 * 60)),
+            },
+            crate::exclusions::Item {
+                freq: 120_000_000,
+                note: Some("receiver carrier".into()),
+                until: None,
+            },
+            crate::exclusions::Item {
+                freq: 136_975_000,
+                note: None,
+                until: None,
+            },
+        ])),
+        exclusions_path: PathBuf::from("rfscan-exclude.txt"),
+        muted: Arc::new(AtomicBool::new(false)),
+        nr: Arc::new(AtomicBool::new(true)),
+        nr_strength: Arc::new(AtomicU32::new(70)),
+        underruns: Arc::new(AtomicU64::new(0)),
+        digi: None,
+        dsd: None,
+        dsd_console: None,
+        voice: None,
+        rec_list: Arc::new(Mutex::new(vec![433_375_000])),
+        recorder: None,
+        recordings: None,
+        player: None,
+        scan_list: Arc::new(Mutex::new(test_ranges())),
+    }
+}
+
+#[cfg(test)]
+/// The ranges of the test context: the airband named, 430-440 MHz switched off.
+pub(crate) fn test_ranges() -> crate::scan_list::ScanList {
+    use crate::plan::Modulation;
+    use crate::scan_list::{ListKind, ScanItem, ScanList, Store};
+    let item = |start, stop, step, mode, name: Option<&str>, enabled| ScanItem {
+        start,
+        stop,
+        step,
+        bw: step,
+        mode,
+        name: name.map(str::to_string),
+        enabled,
+        store: Store::RangeFile,
+        channels: 0..0,
+        inactive: None,
+    };
+    ScanList {
+        kind: ListKind::Ranges,
+        items: vec![
+            item(
+                118_000_000,
+                136_675_000,
+                25_000.0 / 3.0,
+                Modulation::Am,
+                Some("Airband"),
+                true,
+            ),
+            item(
+                430_000_000,
+                440_000_000,
+                25_000.0,
+                Modulation::Nfm,
+                None,
+                false,
+            ),
+        ],
+        ranges_path: None,
+        channels_path: None,
+        error: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1225,75 +1615,7 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     fn app() -> App {
-        let ctx = UiContext {
-            device: "airspy 2064c8703d20018".into(),
-            sample_rate: 6e6,
-            gain: "agc=true,VGA=7".into(),
-            ranges: vec![
-                RangeLabel {
-                    span: "118.000-136.675 MHz".into(),
-                    start: 118_000_000,
-                    stop: 136_675_000,
-                },
-                RangeLabel {
-                    span: "430.000-440.000 MHz".into(),
-                    start: 430_000_000,
-                    stop: 440_000_000,
-                },
-            ],
-            window_range: vec![0, 0, 0, 0, 1, 1, 1, 1, 1, 1],
-            window_names: (0..10).map(|i| format!("A{i}")).collect(),
-            window_span: (0..10u64)
-                .map(|i| match i {
-                    0..4 => (
-                        118_000_000 + i * 4_700_000,
-                        118_000_000 + i * 4_700_000 + 4_690_000,
-                    ),
-                    _ => {
-                        let s = 430_000_000 + (i - 4) * 1_600_000;
-                        (s, s + 1_590_000)
-                    }
-                })
-                .collect(),
-            names: vec![Some("AMATEUR CALLING FREQ".into()), None],
-            channel_db: vec![(145_500_000, "AMATEUR CALLING FREQ".into())],
-            digi_db: Vec::new(),
-            raster25: Vec::new(),
-            channels_path: None,
-            channel_freqs: vec![145_500_000, 433_375_000],
-            activity: Arc::new(Mutex::new(ActivityLog::default())),
-            activity_path: PathBuf::from("rfscan-activity.txt"),
-            exclusions: Arc::new(Mutex::new(vec![
-                crate::exclusions::Item {
-                    freq: 433_625_000,
-                    note: Some("beacon".into()),
-                    until: Some(Instant::now() + Duration::from_secs(23 * 60)),
-                },
-                crate::exclusions::Item {
-                    freq: 120_000_000,
-                    note: Some("receiver carrier".into()),
-                    until: None,
-                },
-                crate::exclusions::Item {
-                    freq: 136_975_000,
-                    note: None,
-                    until: None,
-                },
-            ])),
-            exclusions_path: PathBuf::from("rfscan-exclude.txt"),
-            muted: Arc::new(AtomicBool::new(false)),
-            nr: Arc::new(AtomicBool::new(true)),
-            nr_strength: Arc::new(AtomicU32::new(70)),
-            underruns: Arc::new(AtomicU64::new(0)),
-            digi: None,
-            dsd: None,
-            dsd_console: None,
-            voice: None,
-            rec_list: Arc::new(Mutex::new(vec![433_375_000])),
-            recorder: None,
-            recordings: None,
-            player: None,
-        };
+        let ctx = test_context();
         let mut a = App {
             ctx,
             status: None,
@@ -1318,6 +1640,9 @@ mod tests {
             rec_sel: 0,
             rec_channel: None,
             rec_file_sel: 0,
+            scan_sel: 0,
+            scan_filter: String::new(),
+            scan_filter_edit: false,
         };
         a.apply(UiEvent::Status(Status {
             state: ScanState::Scanning,
@@ -1788,5 +2113,193 @@ mod tests {
         assert!(a.confirm.is_none() && a.rec_channel.is_none());
         assert!(!file.exists() && !root.join("145.500-Calling").exists());
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// The scan list screen with ranges: `[g]` opens it, `[space]` switches the selected range,
+    /// `[A]`/`[N]` all of them as one command, `[l]` names it, `[g]`/`[Esc]` return; the range
+    /// name is shown next to the scan progress.
+    #[test]
+    fn scan_list_screen_ranges() {
+        let mut a = app();
+        let main = render(&a, 120, 32);
+        assert!(main.contains("[g] scan list"), "{main}");
+        // The current window is in the second range (no name); the first one is named.
+        assert!(!main.contains("\"Airband\""), "{main}");
+        assert_eq!(a.key(KeyCode::Char('g')), None);
+        assert!(a.screen == Screen::ScanList);
+        let screen = render(&a, 120, 32);
+        println!("{screen}");
+        assert!(screen.contains("scan list: Ranges 1/2"), "{screen}");
+        assert!(
+            screen.contains("118.000 - 136.675")
+                && screen.contains("8.33")
+                && screen.contains("Airband"),
+            "{screen}"
+        );
+        assert!(screen.contains("[x]") && screen.contains("[ ]"), "{screen}");
+        assert!(
+            screen.contains("[space] scan on/off") && !screen.contains("[/] filter"),
+            "{screen}"
+        );
+        assert_eq!(
+            a.key(KeyCode::Char(' ')),
+            Some(Command::SetScan {
+                items: vec![0],
+                on: false
+            })
+        );
+        a.key(KeyCode::Down);
+        assert_eq!(
+            a.key(KeyCode::Char(' ')),
+            Some(Command::SetScan {
+                items: vec![1],
+                on: true
+            })
+        );
+        assert_eq!(
+            a.key(KeyCode::Char('A')),
+            Some(Command::SetScan {
+                items: vec![0, 1],
+                on: true
+            })
+        );
+        assert_eq!(
+            a.key(KeyCode::Char('N')),
+            Some(Command::SetScan {
+                items: vec![0, 1],
+                on: false
+            })
+        );
+        // No filter and no rec on ranges.
+        assert_eq!(a.key(KeyCode::Char('/')), None);
+        assert!(!a.scan_filter_edit);
+        // Naming: the popup with the current name, Enter sends it, empty removes it.
+        a.key(KeyCode::Up);
+        a.key(KeyCode::Char('l'));
+        let edit = a.edit.as_ref().unwrap();
+        assert!(matches!(edit.kind, EditKind::RangeName { item: 0 }));
+        assert_eq!(edit.text, "Airband");
+        let popup = render(&a, 120, 32);
+        assert!(popup.contains("range: 118.000 - 136.675 MHz"), "{popup}");
+        for _ in 0..7 {
+            a.edit_key(KeyCode::Backspace);
+        }
+        assert_eq!(
+            a.edit_key(KeyCode::Enter),
+            Some(Command::NameRange {
+                item: 0,
+                name: None
+            })
+        );
+        a.key(KeyCode::Char('l'));
+        a.edit_key(KeyCode::Char('!'));
+        assert_eq!(
+            a.edit_key(KeyCode::Enter),
+            Some(Command::NameRange {
+                item: 0,
+                name: Some("Airband!".into())
+            })
+        );
+        a.key(KeyCode::Esc);
+        assert!(a.screen == Screen::Main);
+        // The name next to the scan progress when the scanner is in the named range.
+        if let Some(s) = &mut a.status {
+            s.window = 1;
+        }
+        let main = render(&a, 120, 32);
+        assert!(main.contains("118.000 - 136.675 MHz \"Airband\""), "{main}");
+        // Everything off: the idle view says so.
+        if let Some(s) = &mut a.status {
+            s.state = ScanState::Idle;
+        }
+        let idle = render(&a, 120, 32);
+        assert!(
+            idle.contains("NOTHING TO SCAN") && idle.contains("IDLE"),
+            "{idle}"
+        );
+    }
+
+    /// The scan list screen with channels: filter, rec, `[A]`/`[N]` on the filtered rows, and a
+    /// channel added to the channel file while running marked `after restart`.
+    #[test]
+    fn scan_list_screen_channels() {
+        use crate::scan_list::{ListKind, ScanItem, Store};
+        let mut a = app();
+        let ch = |f: u64, enabled| ScanItem {
+            start: f,
+            stop: f,
+            step: 0.0,
+            bw: 12_500.0,
+            mode: Modulation::Nfm,
+            name: None,
+            enabled,
+            store: Store::ChannelFile,
+            channels: 0..0,
+            inactive: None,
+        };
+        {
+            let mut l = a.ctx.scan_list.lock().unwrap();
+            l.kind = ListKind::Channels;
+            l.items = vec![ch(145_500_000, true), ch(433_375_000, false)];
+        }
+        // A channel named while running is not in the plan.
+        a.ctx.channel_db.push((433_450_000, "NEW".into()));
+        a.key(KeyCode::Char('g'));
+        let rows = a.scan_rows();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].name.as_deref(), Some("AMATEUR CALLING FREQ"));
+        assert!(rows[1].rec && !rows[1].enabled);
+        assert_eq!((rows[2].item, rows[2].note), (None, Some(AFTER_RESTART)));
+        let screen = render(&a, 120, 32);
+        println!("{screen}");
+        assert!(screen.contains("scan list: Channels 1/2"), "{screen}");
+        assert!(
+            screen.contains("after restart") && screen.contains("[/] filter"),
+            "{screen}"
+        );
+        // `[A]`: only the rows that can be switched.
+        assert_eq!(
+            a.key(KeyCode::Char('A')),
+            Some(Command::SetScan {
+                items: vec![0, 1],
+                on: true
+            })
+        );
+        // The row added while running cannot be switched.
+        a.key(KeyCode::End);
+        assert_eq!(a.key(KeyCode::Char(' ')), None);
+        // The filter: typed after `/`, matching the name; `[N]` on the filtered rows only.
+        a.key(KeyCode::Char('/'));
+        for c in "calling".chars() {
+            a.key(KeyCode::Char(c));
+        }
+        a.key(KeyCode::Enter);
+        assert!(!a.scan_filter_edit);
+        assert_eq!(a.scan_rows().len(), 1);
+        assert_eq!(
+            a.key(KeyCode::Char('N')),
+            Some(Command::SetScan {
+                items: vec![0],
+                on: false
+            })
+        );
+        // `[l]` names the channel in the channel file popup; `[r]` without --record-dir says why.
+        a.key(KeyCode::Char('l'));
+        assert!(matches!(
+            a.edit.as_ref().unwrap().kind,
+            EditKind::Label { .. }
+        ));
+        a.edit = None;
+        a.key(KeyCode::Char('r'));
+        assert!(
+            a.notice
+                .as_ref()
+                .is_some_and(|(m, _)| m.contains("--record-dir"))
+        );
+        // `[Esc]` while typing clears the filter.
+        a.key(KeyCode::Char('/'));
+        a.key(KeyCode::Char('x'));
+        a.key(KeyCode::Esc);
+        assert!(a.scan_filter.is_empty() && a.screen == Screen::ScanList);
     }
 }

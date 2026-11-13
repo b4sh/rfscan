@@ -19,6 +19,8 @@ pub enum ScanState {
     Locked,
     Hang,
     Paused,
+    /// Every item of the scan list is switched off: the scanner waits without retuning.
+    Idle,
 }
 
 /// Periodic scanner status.
@@ -104,6 +106,8 @@ pub enum UiEvent {
     History(HistoryItem),
     /// The exclusion list changed (the interface re-reads it from the shared list).
     ExclusionsChanged,
+    /// The scan list changed (the interface re-reads it from the shared list).
+    ScanListChanged,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -154,4 +158,15 @@ pub enum Command {
     },
     /// Change the entry threshold by this many dB.
     Squelch(f32),
+    /// Switch items of the scan list (indices in the shared list) on or off, as one write. If
+    /// the scanner is on a channel of a switched off item, it leaves it at once.
+    SetScan {
+        items: Vec<usize>,
+        on: bool,
+    },
+    /// Name a range of the scan list (`None` removes the name), saved to the range file.
+    NameRange {
+        item: usize,
+        name: Option<String>,
+    },
 }

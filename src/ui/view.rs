@@ -61,6 +61,7 @@ fn state_label(state: ScanState) -> (&'static str, Color) {
         ScanState::Locked => ("LOCKED", Color::LightGreen),
         ScanState::Hang => ("HANG", Color::Yellow),
         ScanState::Paused => ("PAUSED", Color::Magenta),
+        ScanState::Idle => ("IDLE", Color::DarkGray),
     }
 }
 
@@ -223,6 +224,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         Screen::Activity => activity_screen(f, inner, app),
         Screen::Exclusions => exclusions_screen(f, inner, app),
         Screen::Recordings => recordings_screen(f, inner, app),
+        Screen::ScanList => scan_list_screen(f, inner, app),
     }
     if let Some(edit) = &app.edit {
         label_popup(f, area, app, edit);
@@ -383,6 +385,12 @@ fn label_popup(f: &mut Frame, area: Rect, app: &App, edit: &super::LabelEdit) {
             "note: ",
             "[Enter] save (empty removes the note)   [Esc] cancel",
         ),
+        super::EditKind::RangeName { .. } => (
+            " range: ".to_string(),
+            Color::Cyan,
+            "> ",
+            "[Enter] save to the range file (empty removes the name)  [Esc] cancel",
+        ),
     };
     let w = 64.min(area.width.saturating_sub(4));
     let h = 7.min(area.height);
@@ -397,7 +405,17 @@ fn label_popup(f: &mut Frame, area: Rect, app: &App, edit: &super::LabelEdit) {
         .title(Line::from(vec![
             Span::styled(title, Style::new().fg(TEXT)),
             Span::styled(
-                format!("{} MHz ", app.ctx.freq_label(edit.freq)),
+                match edit.kind {
+                    super::EditKind::RangeName { item } => format!(
+                        "{} MHz ",
+                        app.ctx
+                            .scan_rows("")
+                            .into_iter()
+                            .find(|r| r.item == Some(item))
+                            .map_or_else(String::new, |r| r.label)
+                    ),
+                    _ => format!("{} MHz ", app.ctx.freq_label(edit.freq)),
+                },
                 Style::new().fg(FREQ).add_modifier(Modifier::BOLD),
             ),
         ]))
@@ -436,7 +454,7 @@ fn label_popup(f: &mut Frame, area: Rect, app: &App, edit: &super::LabelEdit) {
             }
             lines.push(Line::from(spans));
         }
-        super::EditKind::Note => {}
+        super::EditKind::Note | super::EditKind::RangeName { .. } => {}
     }
     lines.extend([
         match &edit.error {
@@ -515,7 +533,7 @@ fn key_lines(width: usize, items: &[&str], short: &[&str]) -> Vec<Line<'static>>
     lines.iter().map(|l| key_line(l)).collect()
 }
 
-const MAIN_KEYS: [&str; 13] = [
+const MAIN_KEYS: [&str; 14] = [
     "[q] quit",
     "[p] pause",
     "[space] skip",
@@ -528,9 +546,10 @@ const MAIN_KEYS: [&str; 13] = [
     "[</>] NR strength",
     "[a] activity",
     "[e] exclusions",
+    "[g] scan list",
     "[Tab] history",
 ];
-const MAIN_KEYS_SHORT: [&str; 12] = [
+const MAIN_KEYS_SHORT: [&str; 13] = [
     "[q] quit",
     "[p] pause",
     "[␣] skip",
@@ -542,6 +561,7 @@ const MAIN_KEYS_SHORT: [&str; 12] = [
     "[</>] NR%",
     "[a] act",
     "[e] excl",
+    "[g] list",
     "[Tab] hist",
 ];
 /// Keys while a detection history row is selected.
@@ -693,7 +713,15 @@ fn progress_lines(app: &App, wide: bool, width: usize) -> Vec<Line<'static>> {
     } else {
         name.split_at(name.len().min(1))
     };
-    let head = format!("range: {}/{}  {range}  ", r + 1, ctx.ranges.len());
+    // The name of the range (from the scan list), when it has one.
+    let name_part = ctx
+        .range_name(r)
+        .map_or_else(String::new, |n| format!(" \"{}\"", fit(&n, 24)));
+    let head = format!(
+        "range: {}/{}  {range}{name_part}  ",
+        r + 1,
+        ctx.ranges.len()
+    );
     let tail = if wide {
         format!("  pass: {pass}   window: {number}   cycle: {}", s.cycles)
     } else {
@@ -1116,7 +1144,9 @@ fn scan_lines(app: &App, width: usize, big: bool) -> Vec<Line<'static>> {
     // The wave moves by one letter every 150 ms, then a pause of 2 letters.
     const STEP_MS: u128 = 150;
     const SLOTS: u128 = WORD.len() as u128 + 2;
-    let paused = app.status.is_some_and(|s| s.state == ScanState::Paused);
+    let idle = app.status.is_some_and(|s| s.state == ScanState::Idle);
+    // Idle (nothing switched on) looks like paused: the scanner does not move.
+    let paused = idle || app.status.is_some_and(|s| s.state == ScanState::Paused);
     let style = if paused {
         Style::new().fg(DIM).add_modifier(Modifier::BOLD)
     } else {
@@ -1167,7 +1197,14 @@ fn scan_lines(app: &App, width: usize, big: bool) -> Vec<Line<'static>> {
         vec![Line::from(spans)]
     };
     // Info line: the pause message (or a note before the first measurement), otherwise empty.
-    let info = if paused {
+    let info = if idle {
+        let mut l = vec![Span::styled(
+            "NOTHING TO SCAN",
+            Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        )];
+        l.extend(key_line(": everything is switched off, [g] scan list").spans);
+        Some(Line::from(l))
+    } else if paused {
         let mut l = vec![Span::styled(
             "PAUSED",
             Style::new().fg(Color::Magenta).add_modifier(Modifier::BOLD),
@@ -1547,6 +1584,143 @@ fn recordings_screen(f: &mut Frame, inner: Rect, app: &App) {
     };
     if list_len == 0 {
         lines.push(Line::from(dim("  (no recordings)")));
+    }
+    let [body, keys_area] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(keys.len() as u16)]).areas(inner);
+    f.render_widget(Paragraph::new(lines), body);
+    f.render_widget(Paragraph::new(keys), keys_area);
+}
+
+const SCAN_RANGE_KEYS: [&str; 7] = [
+    "[↑↓] scroll",
+    "[space] scan on/off",
+    "[l] name",
+    "[A] all on",
+    "[N] all off",
+    "[g/Esc] back",
+    "[q] quit",
+];
+const SCAN_CHANNEL_KEYS: [&str; 9] = [
+    "[↑↓] scroll",
+    "[space] scan on/off",
+    "[r] rec",
+    "[l] edit channel",
+    "[/] filter",
+    "[A] all on",
+    "[N] all off",
+    "[g/Esc] back",
+    "[q] quit",
+];
+
+/// The scan list: the ranges (range mode) or the channels (channel mode) with their Scan switch.
+fn scan_list_screen(f: &mut Frame, inner: Rect, app: &App) {
+    use crate::scan_list::ListKind;
+    let (kind, on, all) = app.ctx.scan_summary();
+    let channels = kind == ListKind::Channels;
+    let width = inner.width as usize;
+    let keys = if app.scan_filter_edit {
+        vec![key_line("type the filter  [Enter] done  [Esc] clear")]
+    } else if channels {
+        key_lines(width, &SCAN_CHANNEL_KEYS, &SCAN_CHANNEL_KEYS)
+    } else {
+        key_lines(width, &SCAN_RANGE_KEYS, &SCAN_RANGE_KEYS)
+    };
+    let keys = notice_or(app, keys);
+    let rows = app.scan_rows();
+    let mut lines = vec![separator(
+        inner.width,
+        &format!(
+            "scan list: {} {on}/{all}{}",
+            if channels { "Channels" } else { "Ranges" },
+            if app.scan_filter.is_empty() && !app.scan_filter_edit {
+                String::new()
+            } else {
+                format!(
+                    "  filter: {}{}",
+                    app.scan_filter,
+                    if app.scan_filter_edit { "█" } else { "" }
+                )
+            }
+        ),
+    )];
+    // The error of the last switch or name (e.g. the file could not be written).
+    if let Some(e) = app.ctx.scan_error() {
+        lines.push(Line::from(Span::styled(
+            fit(&e, width),
+            Style::new().fg(Color::LightRed),
+        )));
+    }
+    let head_rows = lines.len() + 1;
+    let list_h = (inner.height as usize).saturating_sub(head_rows + keys.len());
+    let sel = app.scan_sel.min(rows.len().saturating_sub(1));
+    let check = |r: &super::ScanRow| {
+        if r.note.is_some() && r.item.is_none() {
+            "   "
+        } else if r.enabled {
+            "[x]"
+        } else {
+            "[ ]"
+        }
+    };
+    if channels {
+        let name_w = width
+            .saturating_sub(2 + 14 + 2 + 5 + 2 + 4 + 2 + 3 + 2 + 18)
+            .clamp(5, 40);
+        lines.push(Line::from(dim(format!(
+            "  {:>14}  {:<5}  {:<name_w$}  scan  rec",
+            "MHz", "mode", "name"
+        ))));
+        for (i, r) in rows
+            .iter()
+            .enumerate()
+            .skip(scroll_start(sel, rows.len(), list_h))
+            .take(list_h)
+        {
+            lines.push(selected(
+                format!(
+                    "{:<2}{:>14}  {:<5}  {:<name_w$}  {}   {:<3}  {}",
+                    if i == sel { "▶" } else { "" },
+                    r.label,
+                    r.mode,
+                    fit(r.name.as_deref().unwrap_or(""), name_w),
+                    check(r),
+                    if r.rec { " ✓" } else { "" },
+                    r.note.unwrap_or("")
+                ),
+                i == sel,
+            ));
+        }
+    } else {
+        let name_w = width
+            .saturating_sub(2 + 23 + 2 + 6 + 2 + 6 + 2 + 5 + 2 + 2 + 4)
+            .clamp(5, 40);
+        lines.push(Line::from(dim(format!(
+            "  {:<23}  {:>6}  {:>6}  {:<5}  {:<name_w$}  scan",
+            "MHz", "step", "bw", "mode", "name"
+        ))));
+        for (i, r) in rows
+            .iter()
+            .enumerate()
+            .skip(scroll_start(sel, rows.len(), list_h))
+            .take(list_h)
+        {
+            lines.push(selected(
+                format!(
+                    "{:<2}{:<23}  {:>6}  {:>6}  {:<5}  {:<name_w$}  {}",
+                    if i == sel { "▶" } else { "" },
+                    r.label,
+                    r.step,
+                    r.bw,
+                    r.mode,
+                    fit(r.name.as_deref().unwrap_or(""), name_w),
+                    check(r)
+                ),
+                i == sel,
+            ));
+        }
+    }
+    if rows.is_empty() {
+        lines.push(Line::from(dim("  (nothing matches the filter)")));
     }
     let [body, keys_area] =
         Layout::vertical([Constraint::Min(0), Constraint::Length(keys.len() as u16)]).areas(inner);

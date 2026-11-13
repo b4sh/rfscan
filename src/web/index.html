@@ -103,7 +103,7 @@ header {
 .theme { border: 1px solid var(--line); background-color: var(--card); border-radius: 6px; width: 32px; height: 28px; cursor: pointer; font-size: 14px; }
 
 /* layout */
-.layout { padding: 10px 16px 84px; max-width: 1400px; margin: 0 auto; }
+.layout { padding: 10px 16px 140px; max-width: 1400px; margin: 0 auto; }
 section.card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; margin-bottom: 10px; }
 body[data-tab="main"] #lists { display: none; }
 body:not([data-tab="main"]) #main { display: none; }
@@ -212,7 +212,30 @@ body:not([data-tab="main"]) #main { display: none; }
 body[data-list="history"] #pane-history,
 body[data-list="activity"] #pane-activity,
 body[data-list="excl"] #pane-excl,
-body[data-list="recs"] #pane-recs { display: block; }
+body[data-list="recs"] #pane-recs,
+body[data-list="scan"] #pane-scan { display: block; }
+/* the scan list: a large button above the list tabs (large screen) or above the bottom bar
+   (phone), not another tab */
+.scanbtn { width: 100%; min-height: 46px; border-radius: 6px; border: 1px solid var(--line); background-color: var(--card2); font-size: 16px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; }
+.scanbtn b { font-variant-numeric: tabular-nums; }
+.scanbtn.active { background-color: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.scanbtn.none { border-color: var(--hang); }
+#bScanWide { display: none; margin-bottom: 8px; }
+#bScanPhone { position: fixed; left: 8px; right: 8px; width: auto; z-index: 5; bottom: calc(60px + env(safe-area-inset-bottom)); box-shadow: 0 -4px 12px rgba(0,0,0,.25); }
+#scanFilter { flex: 1; min-width: 0; min-height: 34px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font-size: 15px; padding: 0 10px; }
+#pane-scan .listhead { flex-wrap: wrap; }
+#pane-scan .lrow .chk { display: inline-flex; align-items: center; gap: 4px; color: var(--dim); font-size: 13px; cursor: pointer; }
+#pane-scan .lrow .chk input { width: 22px; height: 22px; accent-color: var(--accent); margin: 0; }
+#pane-scan .lrow .chk.rec input { accent-color: var(--danger); }
+#pane-scan .lrow.offrow .f, #pane-scan .lrow.offrow .n { opacity: .55; }
+#pane-scan .lrow .hint { color: var(--hang); font-size: 12px; }
+/* phone: the frequency and the name on the first line, the rest and the switches (on the right)
+   on the second; the column layout keeps the order of the columns */
+#pane-scan .lrow > * { order: 3; }
+#pane-scan .lrow .f { order: 0; }
+#pane-scan .lrow .n { order: 1; }
+#pane-scan .lrow .br { order: 2; }
+#pane-scan .lrow label.chk:first-of-type { margin-left: auto; }
 /* without --record-dir there are no recordings */
 body.norec [data-l="recs"], body.norec [data-t="recs"] { display: none; }
 /* phone: the buttons on their own line, on the left; the column layout puts them in a column */
@@ -293,6 +316,8 @@ nav.tabs button.active { color: var(--accent); }
   #lists { position: sticky; top: 56px; max-height: calc(100vh - 70px); overflow: auto; }
   nav.tabs { display: none; }
   .listtabs { display: flex; }
+  #bScanPhone { display: none; }
+  #bScanWide { display: flex; }
 }
 /* lists in columns when their pane is wide enough (phone layout otherwise, no horizontal scroll) */
 #lists { container: lists / inline-size; }
@@ -314,6 +339,11 @@ nav.tabs button.active { color: var(--accent); }
   #pane-recs .lrow.chan { grid-template-columns: 96px minmax(80px, 1fr) 50px 64px 130px; }
   #pane-recs .lrow.file { grid-template-columns: 170px 64px 70px 1fr; }
   #pane-recs .lrow .acts { flex-basis: auto; }
+  #pane-scan .lrow.rng { grid-template-columns: 150px 48px 48px 44px minmax(60px, 1fr) 64px; }
+  #pane-scan .lrow.chn { grid-template-columns: 96px minmax(60px, 1fr) 44px 64px 56px minmax(0, 150px); }
+  #pane-scan .lrow .chk span { display: none; }
+  #pane-scan .lrow > *, #pane-scan .lrow .n, #pane-scan .lrow .br { order: 0; }
+  #pane-scan .lrow label.chk:first-of-type { margin-left: 0; }
 }
 .conn.off { background: var(--danger); }
 .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 70px; z-index: 40; max-width: 90%; background: var(--danger-fill); color: var(--on-danger); padding: 8px 14px; border-radius: 6px; font-weight: 600; display: none; }
@@ -327,12 +357,12 @@ body.nolocal #bMute { display: none; }
 .btn.two small { font-size: 11px; font-weight: 400; opacity: .8; }
 @media (min-width: 960px) and (orientation: landscape) { .toast { bottom: 20px; } }
 /* a soft gradient on every button, over its own color, a bit brighter under the mouse */
-.btn, .smallbtn, .listtabs button, .theme { background-image: var(--btn-grad); transition: filter .15s; }
+.btn, .smallbtn, .listtabs button, .scanbtn, .theme { background-image: var(--btn-grad); transition: filter .15s; }
 @media (hover: hover) {
-  .btn:hover:not(:disabled), .smallbtn:hover:not(:disabled), .listtabs button:hover, .theme:hover { filter: var(--hover); }
+  .btn:hover:not(:disabled), .smallbtn:hover:not(:disabled), .listtabs button:hover, .scanbtn:hover, .theme:hover { filter: var(--hover); }
 }
 /* on a dark fill the strong highlight of the light theme looks like a bulge, so it is much weaker */
-:root[data-theme="light"] :is(.btn.primary, .btn.on, .btn.danger, .listhead .smallbtn.warn, .listtabs button.active, .durs .smallbtn.on, #pane-recs .lrow .acts .smallbtn.on) {
+:root[data-theme="light"] :is(.btn.primary, .btn.on, .btn.danger, .listhead .smallbtn.warn, .listtabs button.active, .scanbtn.active, .durs .smallbtn.on, #pane-recs .lrow .acts .smallbtn.on) {
   --btn-grad: linear-gradient(180deg, rgba(255, 255, 255, .12), rgba(255, 255, 255, 0) 60%, rgba(0, 0, 0, .05));
 }
 /* modulation tags: tinted with the mode color, with a soft gradient */
@@ -422,6 +452,7 @@ body.nolocal #bMute { display: none; }
 
   <div id="lists">
     <section class="card">
+      <button class="scanbtn" id="bScanWide"><span class="lbl">Ranges</span> <b class="cnt">-</b></button>
       <div class="listtabs">
         <button data-l="history">History</button>
         <button data-l="activity">Activity</button>
@@ -444,6 +475,11 @@ body.nolocal #bMute { display: none; }
         <div id="exclList"></div>
       </div>
 
+      <div class="listpane" id="pane-scan">
+        <div class="listhead"><h2 id="scanTitle">Ranges</h2><span class="stats" id="scanCount"></span><input type="text" id="scanFilter" maxlength="40" placeholder="Filter" hidden><button class="smallbtn" id="scanAll">All</button><button class="smallbtn" id="scanNone">None</button></div>
+        <div id="scanList"></div>
+      </div>
+
       <div class="listpane" id="pane-recs">
         <div class="listhead"><h2 id="recTitle">Recordings</h2><span class="stats" id="recCount"></span><button class="smallbtn warn" id="recDelAll" hidden>Delete all</button><button class="smallbtn" id="recBack" hidden>◀ Channels</button></div>
         <div id="recList"></div>
@@ -451,6 +487,8 @@ body.nolocal #bMute { display: none; }
     </section>
   </div>
 </div>
+
+<button class="scanbtn" id="bScanPhone"><span class="lbl">Ranges</span> <b class="cnt">-</b></button>
 
 <nav class="tabs">
   <button data-t="main" class="active"><span class="ico">◉</span>Scanner</button>
@@ -507,6 +545,19 @@ body.nolocal #bMute { display: none; }
   </div>
 </div>
 
+<!-- range sheet: the name of a range of the scan list -->
+<div class="backdrop" id="scanSheet">
+  <div class="sheet">
+    <h3 id="ssRange"></h3>
+    <div class="sub" id="ssInfo"></div>
+    <input type="text" id="ssName" maxlength="40" placeholder="Range name (empty removes it)">
+    <div class="row">
+      <button class="btn primary" id="ssSave">Save</button>
+      <button class="btn" data-close>Cancel</button>
+    </div>
+  </div>
+</div>
+
 <!-- confirm dialog -->
 <div class="backdrop" id="confirm">
   <div class="sheet">
@@ -533,7 +584,7 @@ const recTag = r => `<span class="rec">${r ? "✓" : ""}</span>`;
 
 // State from rfscan: the last message of each kind.
 let autoAudio = false;  // audio started on its own with --local-audio off (once per page load)
-const S = { hello: null, status: null, lock: null, spectrum: null, history: [], activity: [], excl: [], exclAt: 0, recs: [], recFiles: null };
+const S = { hello: null, status: null, lock: null, spectrum: null, history: [], activity: [], excl: [], exclAt: 0, recs: [], recFiles: null, scan: null };
 let ws = null;
 
 function send(o) {
@@ -576,6 +627,7 @@ function connect() {
       case "history_add": S.history.unshift(m.item); S.history.length = Math.min(S.history.length, 200); renderHistory(); break;
       case "activity": S.activity = m.items; renderActivity(); break;
       case "exclusions": S.excl = m.items; S.exclAt = Date.now(); renderExcl(); break;
+      case "scan_list": S.scan = m; renderScan(); break;
       case "recordings": S.recs = m.items; renderRecs(); break;
       case "rec_files":
         // The last file of the channel was deleted: back to the channels.
@@ -782,7 +834,7 @@ function render() { renderHeader(); renderDisplay(); renderControls(); renderSta
 
 function renderHeader() {
   const st = S.status, p = $("statePill");
-  const map = { scanning: ["SCANNING", "--scan"], locked: ["LOCKED", "--lock"], hang: ["HANG", "--hang"], paused: ["PAUSED", "--pause"] };
+  const map = { scanning: ["SCANNING", "--scan"], locked: ["LOCKED", "--lock"], hang: ["HANG", "--hang"], paused: ["PAUSED", "--pause"], idle: ["IDLE", "--hang"] };
   const [txt, col] = st ? map[st.state] : ["OFFLINE", "--danger"];
   p.textContent = txt; p.style.color = `var(${col})`;
   $("recPill").hidden = !(st && st.rec_writing);
@@ -801,7 +853,8 @@ function setText(id, text) { const e = $(id); if (e.textContent !== text) e.text
 
 function renderDisplay() {
   const st = S.status, L = S.lock, sp = S.spectrum;
-  const paused = !!(st && st.state === "paused");
+  const idle = !!(st && st.state === "idle");
+  const paused = idle || !!(st && st.state === "paused");
   const hang = !!(L && L.hang_left != null);
   $("displayCard").classList.toggle("hang", hang);
 
@@ -813,7 +866,7 @@ function renderDisplay() {
   } else {
     // SCANNING: one span per letter for the wave (replaced only on a change, so it keeps running).
     const scan = !!st && !paused;
-    const html = !st ? "OFFLINE" : paused ? "PAUSED"
+    const html = !st ? "OFFLINE" : idle ? "IDLE" : paused ? "PAUSED"
       : [..."SCANNING"].map((c, i) => `<span style="--i:${i}">${c}</span>`).join("");
     if (big.innerHTML !== html) big.innerHTML = html;
     big.className = "big word" + (scan ? " scan" : "") + (paused ? " paused" : "") + (!st ? " off" : "");
@@ -832,6 +885,7 @@ function renderDisplay() {
   let state = " ", cls = "";
   if (!st) state = "waiting for rfscan…";
   else if (hang) { state = `signal gone · resume in ${L.hang_left.toFixed(1)} s`; cls = " hang"; }
+  else if (idle) { state = `nothing to scan · every ${scanNoun(false)} is switched off`; cls = " hang"; }
   else if (paused) { state = "paused · tap Resume to continue"; cls = " paused"; }
   else if (L) state = "receiving";
   else if (sp) state = `window LO ${sp.lo} MHz`;
@@ -841,7 +895,8 @@ function renderDisplay() {
   // The range and the position bar are always shown: on a lock the bar marks the window where
   // the scanner stopped.
   $("dRangeLine").innerHTML = st
-    ? `range <b>${st.range}/${S.hello ? S.hello.ranges : "-"}</b> · <b>${esc(st.span)}</b>`
+    ? `range <b>${st.range}/${S.hello ? S.hello.ranges : "-"}</b> · <b>${esc(st.span)}</b>` +
+      (st.range_name ? ` · <b style="color:var(--name)">${esc(st.range_name)}</b>` : "")
     : "range <b>-</b>";
   $("dSeg").style.left = (st ? st.pos[0] * 100 : 0) + "%";
   $("dSeg").style.width = (st ? st.pos[1] * 100 : 0) + "%";
@@ -979,6 +1034,83 @@ function renderExcl() {
 // The minutes left tick down between list updates.
 setInterval(() => { if (S.excl.some(e => e.left_s != null)) renderExcl(); }, 15000);
 
+/* ---- scan list: the ranges (range mode) or the channels (channel mode) ---- */
+// "range" or "channel" for the texts of the current mode.
+function scanNoun(plural) {
+  const ch = S.scan && S.scan.kind === "channels";
+  return (ch ? "channel" : "range") + (plural ? "s" : "");
+}
+// The rows shown: channels with the text filter (frequency, name, mode).
+function scanView() {
+  if (!S.scan) return [];
+  const f = S.scan.kind === "channels" ? $("scanFilter").value.trim().toLowerCase() : "";
+  return S.scan.items.filter(r => !f || [r.label, r.name || "", r.mode].some(t => t.toLowerCase().includes(f)));
+}
+let scanShown = [];
+function renderScan() {
+  const sc = S.scan, ch = !!sc && sc.kind === "channels";
+  const title = ch ? "Channels" : "Ranges";
+  const open = document.body.dataset.list === "scan" && document.body.dataset.tab !== "main";
+  for (const b of [$("bScanWide"), $("bScanPhone")]) {
+    b.querySelector(".lbl").textContent = title;
+    b.querySelector(".cnt").textContent = sc ? `${sc.on}/${sc.all}` : "-";
+    b.classList.toggle("none", !!sc && sc.on === 0);
+    b.classList.toggle("active", b.id === "bScanWide" ? document.body.dataset.list === "scan" : open);
+  }
+  $("scanTitle").textContent = title;
+  $("scanFilter").hidden = !ch;
+  if (!sc) { $("scanList").innerHTML = `<div class="empty">waiting for rfscan…</div>`; return; }
+  scanShown = scanView();
+  $("scanCount").textContent = `${sc.on} of ${sc.all} on` + (scanShown.length < sc.items.length ? ` · ${scanShown.length} shown` : "");
+  const box = (i, kind, on, dis) => `<label class="chk${kind === "rec" ? " rec" : ""}"><input type="checkbox" data-${kind}="${i}"${on ? " checked" : ""}${dis ? " disabled" : ""}><span>${kind === "rec" ? "Rec" : "Scan"}</span></label>`;
+  $("scanList").innerHTML = scanShown.length === 0 ? `<div class="empty">nothing matches the filter</div>` : ch
+    ? `<div class="lrow head chn"><span>Freq</span><span>Name</span><span>Mode</span><span>Scan</span><span>Rec</span><span></span></div>` +
+      scanShown.map((r, i) => `<div class="lrow chn${r.scan && !r.note ? "" : " offrow"}" data-s="${i}">
+        <span class="f">${esc(r.label)}</span><span class="n">${esc(r.name)}</span><span class="br"></span>${modeTag(r.mode)}
+        ${box(i, "scan", r.scan && r.item != null, !!r.note)}${box(i, "rec", r.rec, false)}<span class="hint">${esc(r.note || "")}</span></div>`).join("")
+    : `<div class="lrow head rng"><span>MHz</span><span>Step</span><span>BW</span><span>Mode</span><span>Name</span><span>Scan</span></div>` +
+      scanShown.map((r, i) => `<div class="lrow rng${r.scan ? "" : " offrow"}" data-s="${i}">
+        <span class="f">${esc(r.label)}</span><span class="c" data-l="step">${esc(r.step)}</span><span class="c" data-l="bw">${esc(r.bw)}</span>${modeTag(r.mode)}
+        <span class="n">${esc(r.name)}</span><span class="br"></span>${box(i, "scan", r.scan, false)}</div>`).join("");
+}
+$("scanFilter").oninput = () => renderScan();
+// All or None: every row shown (with the filter), as one write.
+function scanAll(on) {
+  const items = scanShown.filter(r => r.item != null && !r.note && r.scan !== on).map(r => r.item);
+  if (items.length) send({ c: "scan", items, on });
+}
+$("scanAll").onclick = () => scanAll(true);
+$("scanNone").onclick = () => scanAll(false);
+let ssTarget = null;
+$("scanList").onclick = e => {
+  const sc = e.target.closest("[data-scan]");
+  if (sc) { const r = scanShown[+sc.dataset.scan]; if (r && r.item != null) send({ c: "scan", items: [r.item], on: sc.checked }); return; }
+  const rc = e.target.closest("[data-rec]");
+  if (rc) {
+    const r = scanShown[+rc.dataset.rec]; if (!r) return;
+    if (!S.hello || !S.hello.rec) { rc.checked = !rc.checked; toast("recording needs --record-dir"); return; }
+    send({ c: "rec", freq: r.freq, on: rc.checked });
+    return;
+  }
+  if (e.target.closest("label.chk")) return;
+  const it = e.target.closest("[data-s]"); if (!it) return;
+  const r = scanShown[+it.dataset.s]; if (!r) return;
+  if (S.scan.kind === "channels") { openItem(r, r.note || (r.scan ? "scanned" : "not scanned")); return; }
+  ssTarget = r;
+  $("ssRange").textContent = r.label + " MHz";
+  $("ssInfo").textContent = `step ${r.step} kHz · bw ${r.bw} kHz · ${r.mode} · ${r.scan ? "scanned" : "switched off"}`;
+  $("ssName").value = r.name || "";
+  openSheet("scanSheet");
+};
+$("ssSave").onclick = () => {
+  const r = ssTarget; if (!r) return;
+  send({ c: "range_name", item: r.item, name: $("ssName").value });
+  closeSheet("scanSheet");
+};
+// The phone button toggles between the list and the scanner.
+$("bScanWide").onclick = () => setTab("scan");
+$("bScanPhone").onclick = () => setTab(document.body.dataset.list === "scan" && document.body.dataset.tab !== "main" ? "main" : "scan");
+
 /* ---- recordings: the channels, then the files of one channel ---- */
 let recView = null;  // the channel whose files are shown
 function renderRecs() {
@@ -1092,6 +1224,7 @@ function setTab(t) {
   else { document.body.dataset.tab = "lists"; document.body.dataset.list = t; }
   document.querySelectorAll("nav.tabs button").forEach(b => b.classList.toggle("active", b.dataset.t === t));
   document.querySelectorAll(".listtabs button").forEach(b => b.classList.toggle("active", b.dataset.l === document.body.dataset.list));
+  renderScan();
   if (document.body.dataset.list === "activity") send({ c: "activity" });
   if (document.body.dataset.list === "recs") refreshRecs(true);
 }
@@ -1276,7 +1409,7 @@ $("bTheme").onclick = () => {
 };
 
 setTab("main");
-render(); renderHistory(); renderActivity(); renderExcl();
+render(); renderHistory(); renderActivity(); renderExcl(); renderScan();
 connect();
 </script>
 </body>

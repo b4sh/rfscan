@@ -19,9 +19,11 @@ mod help;
 mod log;
 mod paths;
 mod plan;
+mod ranges;
 mod record;
 mod recorder;
 mod recordings;
+mod scan_list;
 mod scanner;
 mod ui;
 mod web;
@@ -269,12 +271,20 @@ fn check_bw(log: &mut Log, what: &str, bw: f64, width: u64) -> anyhow::Result<()
     Ok(())
 }
 
+/// Channels of the --scan-channels mode (from the command line list or from the channel file),
+/// the digi channels skipped without a digi output (frequency, bw) and the channel file entries.
+type ChannelSet = (
+    Vec<plan::ChannelSpec>,
+    Vec<(u64, f64)>,
+    Vec<channel_db::ChannelEntry>,
+);
+
 /// Channels of the --scan-channels mode: from the command line list or from the channel file.
 fn scan_channels(
     log: &mut Log,
     cli: &Cli,
     list: Option<&cli::ChannelList>,
-) -> anyhow::Result<Vec<plan::ChannelSpec>> {
+) -> anyhow::Result<ChannelSet> {
     let default_mode = cli.mode.unwrap_or(plan::Modulation::Nfm);
     let entries = load_channel_db(log, cli, list.is_none())?;
     let mut specs = Vec::new();
@@ -302,7 +312,7 @@ fn scan_channels(
             });
         }
     } else {
-        for e in entries {
+        for e in &entries {
             let mode = e.mode.unwrap_or(default_mode);
             specs.push(plan::ChannelSpec {
                 freq: e.freq,
@@ -312,21 +322,27 @@ fn scan_channels(
                     .map_or(default_channel_bw(mode), |b| b as f64),
                 mode,
                 raster25: e.raster25,
-                name: e.name,
+                name: e.name.clone(),
             });
         }
     }
     // Without --digi or --digi-tcp digi channels (from the file only: explicit digi is an
     // error) are skipped.
+    let mut skipped = Vec::new();
     if !digi_on(cli) {
-        let before = specs.len();
-        specs.retain(|s| s.mode != plan::Modulation::Digi);
-        let skipped = before - specs.len();
-        if skipped > 0 {
+        specs.retain(|s| {
+            let digi = s.mode == plan::Modulation::Digi;
+            if digi {
+                skipped.push((s.freq, s.bw));
+            }
+            !digi
+        });
+        if !skipped.is_empty() {
             logln!(
                 log,
                 Level::Debug,
-                "skipped {skipped} digi channel(s) from the channel file (no --digi or --digi-tcp)"
+                "skipped {} digi channel(s) from the channel file (no --digi or --digi-tcp)",
+                skipped.len()
             );
         }
     }
@@ -335,22 +351,99 @@ fn scan_channels(
             "no channels to scan (the channel file is empty or has only digi channels without --digi or --digi-tcp; give a list: --scan-channels 145.5M,...)"
         );
     }
-    Ok(specs)
+    Ok((specs, skipped, entries))
 }
 
-/// Builds the plan from the chosen mode (ranges, channels or the default range), prints it and
-/// checks every LO with the device.
+/// A range argument resolved: the step from the range, then --step, then the modulation default;
+/// the bw from the range, then --bw, then the step.
+fn resolve_range(cli: &Cli, a: &cli::RangeArg) -> plan::RangeSpec {
+    let mode = a.mode.or(cli.mode).unwrap_or(plan::Modulation::Nfm);
+    let step = plan::Step::from_hz(a.step.or(cli.step).unwrap_or(match mode {
+        plan::Modulation::Nfm | plan::Modulation::Digi => NFM_DEFAULT_STEP_HZ,
+        plan::Modulation::Am => AM_DEFAULT_STEP_HZ,
+    }));
+    plan::RangeSpec {
+        start: a.start,
+        stop: a.stop,
+        step,
+        bw: range_bw(a.bw, cli.bw, step.hz()),
+        bw_explicit: a.bw.is_some(),
+        mode,
+    }
+}
+
+/// Checks a range against the window band (an error) and warns about a bw below the step.
+fn check_range(log: &mut Log, what: &str, r: &plan::RangeSpec, width: u64) -> anyhow::Result<()> {
+    check_bw(log, what, r.bw, width)?;
+    if r.bw < r.step.hz() - 0.5 {
+        logwarn!(
+            log,
+            "WARNING: {what}: bw {} kHz is smaller than the step {:.4} kHz: signals between channels will not be measured",
+            r.bw / 1e3,
+            r.step.hz() / 1e3
+        );
+    }
+    Ok(())
+}
+
+/// The ranges of the range file that pass the range validation: the window band, the plan (DC
+/// zone) and the device frequency range of every window. A range that fails it gives a warning
+/// with its line number and is skipped.
+fn file_ranges(
+    cli: &Cli,
+    src: &mut SoapySource,
+    width: u64,
+    log: &mut Log,
+    path: &std::path::Path,
+) -> anyhow::Result<Vec<(plan::RangeSpec, ranges::RangeEntry)>> {
+    let (entries, warnings) = ranges::load(path).map_err(anyhow::Error::msg)?;
+    for w in &warnings {
+        logwarn!(log, "WARNING: {}: {w}", path.display());
+    }
+    let mut out = Vec::new();
+    for e in entries {
+        let spec = resolve_range(cli, &e.arg());
+        let what = format!("{}: line {}", path.display(), e.line);
+        let checked = check_range(log, &what, &spec, width)
+            .map_err(|e| e.to_string())
+            .and_then(|()| plan::ranges_plan(&[spec], width, cli.dc_guard))
+            .and_then(|p| {
+                p.passes
+                    .iter()
+                    .flatten()
+                    .try_for_each(|w| src.set_frequency(w.center as f64).map(|_| ()))
+                    .map_err(|e| e.to_string())
+            });
+        match checked {
+            Ok(()) => out.push((spec, e)),
+            Err(err) => logwarn!(log, "WARNING: {what}: {err}; the range is skipped"),
+        }
+    }
+    logln!(
+        log,
+        Level::Debug,
+        "range file: {} ({} ranges)",
+        path.display(),
+        out.len()
+    );
+    Ok(out)
+}
+
+/// Builds the plan from the chosen mode (ranges, channels or the default range) and the scan list
+/// of the session, prints the plan and checks every LO with the device. `files`: the range file
+/// is read and the `off` marks apply (the scan); without it (one-time actions such as `--bench`)
+/// only the command line ranges are used, and every item of the scan list is on.
 fn prepare_plan(
     cli: &Cli,
     src: &mut SoapySource,
     rate: f64,
     log: &mut Log,
-) -> anyhow::Result<plan::ScanPlan> {
+    files: bool,
+) -> anyhow::Result<(plan::ScanPlan, scan_list::ScanList)> {
     let width = (cli.usable * rate).floor() as u64;
     check_explicit_digi(cli)?;
-    let default_mode = cli.mode.unwrap_or(plan::Modulation::Nfm);
-    let plan = if let Some(list) = &cli.scan_channels {
-        let specs = scan_channels(log, cli, list.as_ref())?;
+    let (plan, list) = if let Some(list) = &cli.scan_channels {
+        let (specs, skipped, entries) = scan_channels(log, cli, list.as_ref())?;
         for c in &specs {
             check_bw(
                 log,
@@ -360,86 +453,83 @@ fn prepare_plan(
             )?;
         }
         logln!(log, Level::Debug, "mode: channels");
-        plan::channels_plan(&specs, width, cli.dc_guard).map_err(anyhow::Error::msg)?
+        let plan = plan::channels_plan(&specs, width, cli.dc_guard).map_err(anyhow::Error::msg)?;
+        // Channel mode from the file: the `off` marks of the file. A command line list starts
+        // with every channel on.
+        let from_file = list.is_none() && files;
+        let off = |f: u64| from_file && entries.iter().any(|e| e.freq == f && e.off);
+        let skipped = if list.is_none() { skipped } else { Vec::new() };
+        let path = cli.channels_file.clone().or_else(channel_db::default_path);
+        let scan = scan_list::ScanList::channels(&plan, off, &skipped, from_file, path);
+        (plan, scan)
     } else {
-        let args: Vec<cli::RangeArg> = if cli.scan_range.is_empty() {
-            logln!(
-                log,
-                Level::Debug,
-                "mode: ranges (default range, neither --scan-range nor --scan-channels given)"
-            );
-            vec![cli::RangeArg {
+        let path = cli.ranges_file.clone().or_else(ranges::default_path);
+        let from_file = match (&path, files) {
+            (Some(p), true) => file_ranges(cli, src, width, log, p)?,
+            _ => Vec::new(),
+        };
+        let mut from_cli = Vec::with_capacity(cli.scan_range.len());
+        for a in &cli.scan_range {
+            let r = resolve_range(cli, a);
+            let what = format!("range {}-{} MHz", a.start as f64 / 1e6, a.stop as f64 / 1e6);
+            check_range(log, &what, &r, width)?;
+            from_cli.push(r);
+        }
+        let default = resolve_range(
+            cli,
+            &cli::RangeArg {
                 start: DEFAULT_RANGE.0,
                 stop: DEFAULT_RANGE.1,
                 step: None,
                 mode: None,
                 bw: None,
-            }]
+            },
+        );
+        let source = if cli.scan_range_from_conf {
+            scan_list::RangeSource::Conf
         } else {
-            logln!(log, Level::Debug, "mode: ranges");
-            cli.scan_range.clone()
+            scan_list::RangeSource::CommandLine
         };
-        let mut ranges = Vec::with_capacity(args.len());
-        for a in &args {
-            let mode = a.mode.unwrap_or(default_mode);
-            // Step: from the range, then --step, then the modulation default.
-            let step = plan::Step::from_hz(a.step.or(cli.step).unwrap_or(match mode {
-                plan::Modulation::Nfm | plan::Modulation::Digi => NFM_DEFAULT_STEP_HZ,
-                plan::Modulation::Am => AM_DEFAULT_STEP_HZ,
-            }));
-            let bw = range_bw(a.bw, cli.bw, step.hz());
-            let what = format!("range {}-{} MHz", a.start as f64 / 1e6, a.stop as f64 / 1e6);
-            check_bw(log, &what, bw, width)?;
-            if bw < step.hz() - 0.5 {
-                logwarn!(
-                    log,
-                    "WARNING: {what}: bw {} kHz is smaller than the step {:.4} kHz: signals between channels will not be measured",
-                    bw / 1e3,
-                    step.hz() / 1e3
-                );
-            }
-            ranges.push(plan::RangeSpec {
-                start: a.start,
-                stop: a.stop,
-                step,
-                bw,
-                bw_explicit: a.bw.is_some(),
-                mode,
-            });
+        let (session, warnings) = scan_list::merge_ranges(from_file, from_cli, source, default);
+        for w in &warnings {
+            logwarn!(log, "{w}");
         }
-        for (i, a) in ranges.iter().enumerate() {
-            for b in &ranges[i + 1..] {
-                if a.start <= b.stop && b.start <= a.stop {
-                    logwarn!(
-                        log,
-                        "WARNING: ranges {}-{} and {}-{} MHz overlap: shared frequencies will be scanned twice",
-                        a.start as f64 / 1e6,
-                        a.stop as f64 / 1e6,
-                        b.start as f64 / 1e6,
-                        b.stop as f64 / 1e6
-                    );
-                }
-            }
-        }
-        for r in &ranges {
+        scan_list::check_overlaps(&session).map_err(anyhow::Error::msg)?;
+        if session[0].source == scan_list::RangeSource::Default {
             logln!(
                 log,
                 Level::Debug,
-                "  range {}-{} MHz, step {:.4} kHz, bw {:.4} kHz, {}",
-                r.start as f64 / 1e6,
-                r.stop as f64 / 1e6,
-                r.step.hz() / 1e3,
-                r.bw / 1e3,
-                r.mode.name()
+                "mode: ranges (default range: no range in the range file or --scan-range, no --scan-channels)"
+            );
+            check_range(log, "default range", &session[0].spec, width)?;
+        } else {
+            logln!(log, Level::Debug, "mode: ranges");
+        }
+        for r in &session {
+            logln!(
+                log,
+                Level::Debug,
+                "  range {}-{} MHz, step {:.4} kHz, bw {:.4} kHz, {}{}{}",
+                r.spec.start as f64 / 1e6,
+                r.spec.stop as f64 / 1e6,
+                r.spec.step.hz() / 1e3,
+                r.spec.bw / 1e3,
+                r.spec.mode.name(),
+                r.name
+                    .as_deref()
+                    .map_or(String::new(), |n| format!(" \"{n}\"")),
+                if r.off && files { ", switched off" } else { "" }
             );
         }
+        let specs: Vec<plan::RangeSpec> = session.iter().map(|r| r.spec).collect();
         let mut plan =
-            plan::ranges_plan(&ranges, width, cli.dc_guard).map_err(anyhow::Error::msg)?;
+            plan::ranges_plan(&specs, width, cli.dc_guard).map_err(anyhow::Error::msg)?;
         let entries = load_channel_db(log, cli, false)?;
         for w in apply_channel_db(&mut plan, &entries) {
             logwarn!(log, "{w}");
         }
-        plan
+        let scan = scan_list::ScanList::ranges(&session, &plan, path);
+        (plan, scan)
     };
 
     logln!(
@@ -502,11 +592,11 @@ fn prepare_plan(
             );
         }
     }
-    Ok(plan)
+    Ok((plan, list))
 }
 
 fn run_bench(cli: &Cli, src: &mut SoapySource, rate: f64, log: &mut Log) -> anyhow::Result<()> {
-    let plan = prepare_plan(cli, src, rate, log)?;
+    let (plan, _) = prepare_plan(cli, src, rate, log, false)?;
     // Passes alternate: A, B, A, B...
     let windows: Vec<plan::Window> = plan.passes.concat();
 
@@ -565,7 +655,7 @@ fn run_record(
     dir: &std::path::Path,
     log: &mut Log,
 ) -> anyhow::Result<()> {
-    let plan = prepare_plan(cli, src, rate, log)?;
+    let (plan, _) = prepare_plan(cli, src, rate, log, false)?;
     let (Some(window), Some(channel)) = (
         plan.passes.first().and_then(|p| p.first()),
         plan.channels.first(),
@@ -642,7 +732,7 @@ fn run_record(
 /// `--calibrate`: measures --settle, then asks whether to save it to the configuration
 /// file.
 fn run_calibrate(cli: &Cli, src: &mut SoapySource, rate: f64, log: &mut Log) -> anyhow::Result<()> {
-    let plan = prepare_plan(cli, src, rate, log)?;
+    let (plan, _) = prepare_plan(cli, src, rate, log, false)?;
     let setup = calibrate::Setup {
         fft_size: fft_size(cli, &plan, rate),
         dc_mask: cli.dc_mask,
@@ -710,7 +800,7 @@ fn run_scan(cli: &Cli, src: &mut SoapySource, rate: f64, log: &mut Log) -> anyho
             dir.display()
         );
     }
-    let plan = prepare_plan(cli, src, rate, log)?;
+    let (plan, scan) = prepare_plan(cli, src, rate, log, true)?;
     let fft_size = fft_size(cli, &plan, rate);
     let dwell_samples = cli.dwell * 1e-3 * rate;
     let frames = ((dwell_samples / fft_size as f64).round() as usize).max(1);
@@ -788,6 +878,23 @@ fn run_scan(cli: &Cli, src: &mut SoapySource, rate: f64, log: &mut Log) -> anyho
         exclude_path.display(),
         exclusions.masked_channels()
     );
+    // The scan list: how many items are switched off at the start.
+    let (on, all) = scan.counts();
+    let what = match scan.kind {
+        scan_list::ListKind::Ranges => "ranges",
+        scan_list::ListKind::Channels => "channels",
+    };
+    logln!(
+        log,
+        if on < all { Level::Info } else { Level::Debug },
+        "scan list: {on} of {all} {what} on{}",
+        if on < all {
+            format!(", {} disabled", all - on)
+        } else {
+            String::new()
+        }
+    );
+    let scan: scan_list::SharedScanList = Arc::new(Mutex::new(scan));
     logln!(
         log,
         Level::Debug,
@@ -1145,6 +1252,7 @@ fn run_scan(cli: &Cli, src: &mut SoapySource, rate: f64, log: &mut Log) -> anyho
             recorder: rec.as_ref().map(|r| r.shared.clone()),
             recordings: library.clone(),
             player: player.clone(),
+            scan_list: scan.clone(),
         }
     });
     let mut ui_link = None;
@@ -1249,6 +1357,7 @@ fn run_scan(cli: &Cli, src: &mut SoapySource, rate: f64, log: &mut Log) -> anyho
             exclusions: &mut exclusions,
             ui: ui_link,
             recorder: rec.as_ref().map(|r| &r.link),
+            scan_list: &scan,
         },
         log,
     );
@@ -1320,7 +1429,11 @@ fn range_labels(cli: &Cli, plan: &plan::ScanPlan) -> Vec<ui::RangeLabel> {
             let last = chans.next_back().or(first);
             match (first, last) {
                 (Some(a), Some(b)) => ui::RangeLabel {
-                    span: format!("{:.3}-{:.3} MHz", a.freq as f64 / 1e6, b.freq as f64 / 1e6),
+                    span: format!(
+                        "{:.3} - {:.3} MHz",
+                        a.freq as f64 / 1e6,
+                        b.freq as f64 / 1e6
+                    ),
                     start: a.freq,
                     stop: b.freq,
                 },
@@ -1739,6 +1852,7 @@ mod tests {
             bw,
             name: Some(format!("K{freq}")),
             rec: false,
+            off: false,
             raster25: false,
             freq_text: String::new(),
             line: 1,
@@ -1826,6 +1940,11 @@ mod tests {
             entry(438_802_000, Some(Modulation::Digi), None),
             entry(438_500_000, Some(Modulation::Am), None),
             entry(438_250_000, None, Some(10_000)),
+            // `off` switches a channel off only in channel mode: no effect in a range.
+            channel_db::ChannelEntry {
+                off: true,
+                ..entry(438_600_000, Some(Modulation::Am), None)
+            },
         ];
         let find = |p: &plan::ScanPlan, f: u64| p.channels.iter().find(|c| c.freq == f).cloned();
 
@@ -1846,6 +1965,11 @@ mod tests {
         assert_eq!(
             (am.mode, am.demod_bw, am.bw),
             (Modulation::Am, 12_500.0, 12_500.0)
+        );
+        let off = find(&p, 438_600_000).unwrap();
+        assert_eq!(
+            (off.name.as_deref(), off.mode),
+            (Some("K438600000"), Modulation::Am)
         );
         let narrow = find(&p, 438_250_000).unwrap();
         assert_eq!((narrow.mode, narrow.demod_bw), (Modulation::Nfm, 10_000.0));
