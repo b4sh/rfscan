@@ -678,11 +678,13 @@ const Audio_ = {
   on: false, background: false,  // background: the stream instead of the fast path
   ctx: null, node: null,
   el: document.getElementById("streamAudio"), streamAt: 0, streamRetry: null,
-  blocked: false, interrupted: false, unblockedAt: 0,
+  blocked: false, interrupted: false, unblockedAt: 0, fastAt: 0,
   ring: new Float32Array(8192), w: 0, r: 0, count: 0, frac: 0, step: 1, primed: false,
   start() {
     this.on = true;
     this.interrupted = false;
+    // WebKit (Safari, every browser on iOS): without this the silent switch mutes Audio.
+    try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch (e) {}
     if (this.background) {
       this.startStream();
       this.showIcon(true);
@@ -695,6 +697,7 @@ const Audio_ = {
     let ctx;
     try { ctx = new AC({ sampleRate: this.RATE }); } catch (e) { ctx = new AC(); }
     this.ctx = ctx;
+    this.fastAt = Date.now();
     this.step = this.RATE / ctx.sampleRate;
     this.w = this.r = this.count = 0; this.frac = 0; this.primed = false;
     // About 64 ms per callback at 8 kHz (43 ms at 48 kHz).
@@ -714,11 +717,21 @@ const Audio_ = {
     ctx.resume();
     send({ c: "audio", on: true });
   },
-  // Started without a click the browser may block the sound until the first gesture.
-  get suspended() { return this.blocked || (!!this.ctx && this.ctx.state === "suspended"); },
+  // Started without a click the browser may block the sound until the first gesture. Any state
+  // but "running" is blocked: WebKit also has "interrupted".
+  get suspended() { return this.blocked || (!!this.ctx && this.ctx.state !== "running"); },
+  // WebKit does not always resume a context created before a gesture, so the gesture gets a new one.
   unblock() {
     this.unblockedAt = Date.now();
-    if (this.ctx) this.ctx.resume();
+    // Created by this gesture (the click goes on to the page): still starting, not blocked.
+    if (this.ctx && Date.now() - this.fastAt < 1000) this.ctx.resume();
+    else if (this.ctx && this.ctx.state !== "running") {
+      if (this.node) this.node.disconnect();
+      this.ctx.onstatechange = null;
+      this.ctx.close();
+      this.node = null; this.ctx = null;
+      this.startFast();
+    }
     if (this.blocked) this.startStream();
   },
   stop() {

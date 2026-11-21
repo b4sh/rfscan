@@ -19,7 +19,7 @@ use axum::Router;
 use axum::body::{Body, Bytes};
 use axum::extract::ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, State};
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
@@ -367,49 +367,64 @@ async fn recording(
 /// fetching and playing it when the page is hidden or frozen, which Web Audio does not. The audio
 /// frames include the silence between signals, so the player never runs out of data. A browser
 /// puts a locked page to sleep after some seconds of silent output, so the stream carries the tone.
-async fn stream(State((hub, stop)): State<AppState>, Query(q): Query<TokenQuery>) -> Response {
-    if !hub.authorized(&q) {
-        return StatusCode::FORBIDDEN.into_response();
-    }
+async fn stream(
+    State((hub, stop)): State<AppState>,
+    Query(q): Query<TokenQuery>,
+    headers: HeaderMap,
+) -> Response {
+    let range = headers.get(header::RANGE).map(HeaderValue::as_bytes);
+    let plan = match stream_plan(hub.authorized(&q), range) {
+        Ok(plan) => plan,
+        Err(refused) => return refused.into_response(),
+    };
     let mut tone = StreamTone::default();
-    let state = (
-        Some(stream_start(&mut tone)),
-        tone,
-        hub.tx.subscribe(),
-        stop,
-    );
-    let frames =
-        futures_util::stream::unfold(state, |(start, mut tone, mut rx, mut stop)| async move {
-            if let Some(chunk) = start {
-                return Some((
-                    Ok::<_, std::convert::Infallible>(chunk),
-                    (None, tone, rx, stop),
-                ));
-            }
+    let start = plan.with_start.then(|| stream_start(&mut tone));
+    let state = (start, tone, plan.cut, hub.tx.subscribe(), stop);
+    let frames = futures_util::stream::unfold(
+        state,
+        |(mut start, mut tone, mut cut, mut rx, mut stop)| async move {
             loop {
-                tokio::select! {
-                    o = rx.recv() => match o {
-                        Ok(Out::Audio(frame)) => {
-                            let chunk = Bytes::from(mulaw_frame_to_pcm(&frame, &mut tone));
-                            return Some((Ok(chunk), (None, tone, rx, stop)));
-                        }
-                        Ok(Out::Text(_)) | Err(broadcast::error::RecvError::Lagged(_)) => {}
-                        Err(broadcast::error::RecvError::Closed) => return None,
+                let chunk = match start.take() {
+                    Some(chunk) => chunk,
+                    None if cut.done() => return None,
+                    None => tokio::select! {
+                        o = rx.recv() => match o {
+                            Ok(Out::Audio(frame)) => Bytes::from(mulaw_frame_to_pcm(&frame, &mut tone)),
+                            Ok(Out::Text(_)) | Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(broadcast::error::RecvError::Closed) => return None,
+                        },
+                        _ = stop.changed() => return None,
                     },
-                    _ = stop.changed() => return None,
+                };
+                let chunk = cut.apply(chunk)?;
+                if !chunk.is_empty() {
+                    return Some((
+                        Ok::<_, std::convert::Infallible>(chunk),
+                        (None, tone, cut, rx, stop),
+                    ));
                 }
             }
-        });
-    (
+        },
+    );
+    let mut response = (
+        plan.status,
         [
             (header::CONTENT_TYPE, "audio/wav"),
             (header::CACHE_CONTROL, "no-store"),
+            (header::ACCEPT_RANGES, "bytes"),
             // A reverse proxy must pass the live audio on at once (nginx reads this header).
             (header::HeaderName::from_static("x-accel-buffering"), "no"),
         ],
         Body::from_stream(frames),
     )
-        .into_response()
+        .into_response();
+    if let Some(v) = plan
+        .content_range
+        .and_then(|v| HeaderValue::from_str(&v).ok())
+    {
+        response.headers_mut().insert(header::CONTENT_RANGE, v);
+    }
+    response
 }
 
 async fn ws(
@@ -1234,8 +1249,16 @@ async fn audio_task(
 /// Sample rate of the μ-law audio (browser audio and recordings).
 pub(crate) const MULAW_RATE: f64 = AUDIO_RATE;
 
+/// Data size in the header of the endless stream: the largest whole number of 16-bit samples
+/// whose RIFF size still fits in 32 bits.
+const STREAM_DATA_SIZE: u32 = (u32::MAX - 36) & !1;
+
+/// Length of the stream as one virtual file, for byte ranges: the header and the data.
+const STREAM_TOTAL: u64 = STREAM_DATA_SIZE as u64 + 44;
+
 /// WAV header of the audio stream: 16-bit PCM, because browsers do not all play μ-law WAV. The
-/// length is not known, so both sizes have the largest value.
+/// length is not known, so the sizes describe the largest file, consistently, because WebKit
+/// reads the stream as a file of that length through byte ranges.
 fn stream_wav_header() -> [u8; 44] {
     const CHANNELS: u16 = 1;
     const BITS: u16 = 16;
@@ -1243,7 +1266,7 @@ fn stream_wav_header() -> [u8; 44] {
     let block = CHANNELS * BITS / 8;
     let mut h = [0u8; 44];
     h[0..4].copy_from_slice(b"RIFF");
-    h[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
+    h[4..8].copy_from_slice(&(STREAM_DATA_SIZE + 36).to_le_bytes());
     h[8..16].copy_from_slice(b"WAVEfmt ");
     h[16..20].copy_from_slice(&16u32.to_le_bytes());
     h[20..22].copy_from_slice(&1u16.to_le_bytes());
@@ -1253,8 +1276,125 @@ fn stream_wav_header() -> [u8; 44] {
     h[32..34].copy_from_slice(&block.to_le_bytes());
     h[34..36].copy_from_slice(&BITS.to_le_bytes());
     h[36..40].copy_from_slice(b"data");
-    h[40..44].copy_from_slice(&u32::MAX.to_le_bytes());
+    h[40..44].copy_from_slice(&STREAM_DATA_SIZE.to_le_bytes());
     h
+}
+
+/// How one request for the stream is answered.
+#[derive(Debug, PartialEq)]
+struct StreamPlan {
+    /// `200` without a range, `206` with one.
+    status: StatusCode,
+    /// `Content-Range` of a `206`.
+    content_range: Option<String>,
+    /// The header and the start silence first (a range from byte 0, or no range).
+    with_start: bool,
+    /// What the body leaves out and how much it sends.
+    cut: StreamCut,
+}
+
+/// The answer to a request for the stream before any audio: refused without the token, `416`
+/// for a range it cannot serve. Safari and every browser on iOS (WebKit) ask for byte ranges
+/// (first `bytes=0-1`) and refuse an answer without them.
+fn stream_plan(authorized: bool, range: Option<&[u8]>) -> Result<StreamPlan, Refused> {
+    if !authorized {
+        return Err(Refused::Token);
+    }
+    let Some(range) = range else {
+        return Ok(StreamPlan {
+            status: StatusCode::OK,
+            content_range: None,
+            with_start: true,
+            cut: StreamCut {
+                skip: 0,
+                left: None,
+            },
+        });
+    };
+    let Some((start, end)) = parse_range(range) else {
+        return Err(Refused::Range);
+    };
+    Ok(StreamPlan {
+        status: StatusCode::PARTIAL_CONTENT,
+        content_range: Some(format!("bytes {start}-{end}/{STREAM_TOTAL}")),
+        with_start: start == 0,
+        cut: StreamCut {
+            // From byte 1 on there is only live audio, which starts on a sample: an odd start
+            // sends the second byte of the first sample, so the bytes stay where they belong.
+            skip: start % 2,
+            left: Some(end - start + 1),
+        },
+    })
+}
+
+/// Why a request for the stream gets no audio.
+#[derive(Debug, PartialEq)]
+enum Refused {
+    Token,
+    Range,
+}
+
+impl IntoResponse for Refused {
+    fn into_response(self) -> Response {
+        match self {
+            Refused::Token => StatusCode::FORBIDDEN.into_response(),
+            Refused::Range => (
+                StatusCode::RANGE_NOT_SATISFIABLE,
+                [
+                    (header::ACCEPT_RANGES, "bytes".to_string()),
+                    (header::CONTENT_RANGE, format!("bytes */{STREAM_TOTAL}")),
+                ],
+            )
+                .into_response(),
+        }
+    }
+}
+
+/// One `bytes=START-END` or `bytes=START-` range within the stream, as (start, end) with the end
+/// included and kept within the stream. Anything else (several ranges, a suffix, a start beyond
+/// the stream, an end before the start) cannot be served.
+fn parse_range(v: &[u8]) -> Option<(u64, u64)> {
+    let v = std::str::from_utf8(v).ok()?.trim();
+    let (start, end) = v.strip_prefix("bytes=")?.trim().split_once('-')?;
+    let start: u64 = start.trim().parse().ok()?;
+    let end = match end.trim() {
+        "" => STREAM_TOTAL - 1,
+        e => e.parse::<u64>().ok()?.min(STREAM_TOTAL - 1),
+    };
+    (start < STREAM_TOTAL && end >= start).then_some((start, end))
+}
+
+/// Cuts the stream bytes for a range: leaves out the first `skip` bytes, then sends at most `left`.
+#[derive(Debug, PartialEq)]
+struct StreamCut {
+    skip: u64,
+    left: Option<u64>,
+}
+
+impl StreamCut {
+    /// The part of `chunk` to send (may be empty), or `None` once the range is complete.
+    fn apply(&mut self, mut chunk: Bytes) -> Option<Bytes> {
+        if self.left == Some(0) {
+            return None;
+        }
+        let skip = usize::try_from(self.skip)
+            .unwrap_or(usize::MAX)
+            .min(chunk.len());
+        self.skip -= skip as u64;
+        chunk = chunk.slice(skip..);
+        if let Some(left) = &mut self.left {
+            let n = usize::try_from(*left)
+                .unwrap_or(usize::MAX)
+                .min(chunk.len());
+            *left -= n as u64;
+            chunk.truncate(n);
+        }
+        Some(chunk)
+    }
+
+    fn done(&self) -> bool {
+        self.left == Some(0)
+    }
 }
 
 /// Seconds of silence at the start of the stream (`START_SILENCE` in the page). A browser starts
@@ -1480,7 +1620,153 @@ mod tests {
         assert_eq!(u32_at(28), 16000, "bytes per second");
         assert_eq!(u16_at(32), 2, "block size");
         assert_eq!(u16_at(34), 16, "bits");
-        assert_eq!(u32_at(40), u32::MAX, "endless data");
+        // The largest file, described consistently: RIFF size = data + 36, whole samples.
+        let data = u32_at(40);
+        assert_eq!(data % 2, 0);
+        assert_eq!(u64::from(u32_at(4)), u64::from(data) + 36);
+        assert!(u32_at(4) > u32::MAX - 2);
+        assert_eq!(u64::from(u32_at(4)) + 8, STREAM_TOTAL);
+    }
+
+    fn plan(range: &str) -> StreamPlan {
+        stream_plan(true, Some(range.as_bytes())).unwrap()
+    }
+
+    fn refused(authorized: bool, range: Option<&str>) -> Response {
+        stream_plan(authorized, range.map(str::as_bytes))
+            .unwrap_err()
+            .into_response()
+    }
+
+    #[test]
+    fn stream_without_a_range_is_the_whole_stream() {
+        let p = stream_plan(true, None).unwrap();
+        assert_eq!(p.status, StatusCode::OK);
+        assert_eq!(p.content_range, None);
+        assert!(p.with_start);
+        assert_eq!(
+            p.cut,
+            StreamCut {
+                skip: 0,
+                left: None
+            }
+        );
+    }
+
+    #[test]
+    fn stream_token_is_checked_before_the_range() {
+        for range in [None, Some("bytes=0-1"), Some("nonsense")] {
+            assert_eq!(refused(false, range).status(), StatusCode::FORBIDDEN);
+        }
+    }
+
+    #[test]
+    fn stream_ranges_from_the_start() {
+        let p = plan("bytes=0-1");
+        assert_eq!(p.status, StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            p.content_range.as_deref(),
+            Some(&*format!("bytes 0-1/{STREAM_TOTAL}"))
+        );
+        assert!(p.with_start);
+        assert_eq!(
+            p.cut,
+            StreamCut {
+                skip: 0,
+                left: Some(2)
+            }
+        );
+
+        let p = plan("bytes=0-");
+        let last = STREAM_TOTAL - 1;
+        assert_eq!(
+            p.content_range.as_deref(),
+            Some(&*format!("bytes 0-{last}/{STREAM_TOTAL}"))
+        );
+        assert_eq!(p.cut.left, Some(STREAM_TOTAL));
+        // An end beyond the stream is cut to its last byte.
+        assert_eq!(
+            plan(&format!("bytes=0-{}", STREAM_TOTAL + 5)).cut.left,
+            Some(STREAM_TOTAL)
+        );
+    }
+
+    #[test]
+    fn stream_ranges_later_in_the_stream() {
+        let p = plan("bytes=1000-1999");
+        assert!(!p.with_start);
+        assert_eq!(
+            p.content_range.as_deref(),
+            Some(&*format!("bytes 1000-1999/{STREAM_TOTAL}"))
+        );
+        assert_eq!(
+            p.cut,
+            StreamCut {
+                skip: 0,
+                left: Some(1000)
+            }
+        );
+        let p = plan(" bytes=1001- ");
+        assert!(!p.with_start);
+        assert_eq!(
+            p.cut,
+            StreamCut {
+                skip: 1,
+                left: Some(STREAM_TOTAL - 1001)
+            }
+        );
+    }
+
+    #[test]
+    fn stream_ranges_it_cannot_serve() {
+        let start_beyond = format!("bytes={STREAM_TOTAL}-");
+        for range in [
+            "bytes=0-1,4-5",
+            "bytes=-500",
+            "bytes=5-4",
+            "items=0-1",
+            "bytes=x-1",
+            &start_beyond,
+        ] {
+            let r = refused(true, Some(range));
+            assert_eq!(r.status(), StatusCode::RANGE_NOT_SATISFIABLE, "{range}");
+            assert_eq!(
+                r.headers()[header::CONTENT_RANGE],
+                format!("bytes */{STREAM_TOTAL}").as_str(),
+                "{range}"
+            );
+        }
+    }
+
+    /// The bytes a cut sends from the given chunks, and whether it ended.
+    fn run_cut(mut cut: StreamCut, chunks: &[&[u8]]) -> (Vec<u8>, bool) {
+        let mut out = Vec::new();
+        for c in chunks {
+            match cut.apply(Bytes::copy_from_slice(c)) {
+                Some(b) => out.extend_from_slice(&b),
+                None => return (out, true),
+            }
+        }
+        (out, cut.done())
+    }
+
+    #[test]
+    fn stream_cut_sends_the_range() {
+        let start = stream_start(&mut StreamTone::default());
+        // bytes=0-1: the first two bytes of the header, then the end.
+        let (out, ended) = run_cut(plan("bytes=0-1").cut, &[&start, b"live"]);
+        assert_eq!((out.as_slice(), ended), (&b"RI"[..], true));
+        // bytes=0-: the header and the silence, then the live audio.
+        let (out, ended) = run_cut(plan("bytes=0-").cut, &[&start, b"live"]);
+        assert_eq!(out[..44], stream_wav_header());
+        assert_eq!(out.len(), start.len() + 4);
+        assert!(!ended);
+        // An odd start: the second byte of the first sample, then whole samples.
+        let (out, ended) = run_cut(plan("bytes=1001-1004").cut, &[b"aAbB", b"cCdD"]);
+        assert_eq!((out.as_slice(), ended), (&b"AbBc"[..], true));
+        // An even start: whole samples from the first one.
+        let (out, _) = run_cut(plan("bytes=1000-").cut, &[b"aAbB"]);
+        assert_eq!(out, b"aAbB");
     }
 
     #[test]
